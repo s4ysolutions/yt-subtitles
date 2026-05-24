@@ -1,0 +1,13 @@
+.build/
+DerivedData/
+*.m4a
+*.wav
+*.mp4
+*.srt
+*.vtt
+.DS_Store
+**/xcuserdata/
+**/*.xcuserstate
+.idea/
+Sources/.idea/
+.claude/settings.local.json

@@ -1,0 +1,39 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: macos-15   # arm64, Xcode 16+ required by argmax-oss-swift 1.0.0 (MLState)
+
+    steps:
+      - uses: actions/checkout@v4
+#
+#      - name: Test
+#        run: swift test
+
+      - name: Build release
+        run: swift build -c release
+
+      - name: Package
+        run: |
+          strip .build/release/yt-subtitles
+          zip -j yt-subtitles-macos-arm64.zip .build/release/yt-subtitles
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yt-subtitles-macos-arm64
+          path: yt-subtitles-macos-arm64.zip
+          retention-days: 30
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: yt-subtitles-macos-arm64.zip
