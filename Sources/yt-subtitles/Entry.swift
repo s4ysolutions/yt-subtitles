@@ -17,7 +17,7 @@ struct YTSubtitles: AsyncParsableCommand {
     @Option(help: "Transcribe and subtitle a local video file (any format ffmpeg supports)")
     var localVideo: String? = nil
 
-    @Option(help: "Whisper model: tiny, base, small, large, full name, or glob. Omit for recommended default")
+    @Option(help: "Whisper model: tiny, base, small, large, full name, or glob. Default: small")
     var model: String? = nil
 
     @Option(help: "Audio language code (e.g. en, sr). Omit for auto-detect")
@@ -62,6 +62,9 @@ struct YTSubtitles: AsyncParsableCommand {
     @Flag(help: "List available Whisper models from HuggingFace and exit")
     var listModels = false
 
+    @Flag(help: "Manage cached models. Without --model: list downloaded models. With --model <name>: delete that model from cache.")
+    var cleanModel = false
+
     // MARK: - Entry
 
     mutating func run() async throws {
@@ -72,6 +75,95 @@ struct YTSubtitles: AsyncParsableCommand {
             print("Available models (\(available.count)):")
             for name in available.sorted() {
                 print("  \(name)")
+            }
+            return
+        }
+
+        // --- clean model cache ---
+        if cleanModel {
+            let cacheDir = Transcriber.defaultModelCacheDir(override: modelDir)
+            // WhisperKit stores models at: <downloadBase>/models/argmaxinc/whisperkit-coreml/<name>/
+            let modelsBase = cacheDir.appendingPathComponent("models/argmaxinc/whisperkit-coreml")
+            let fm = FileManager.default
+            if let modelName = model {
+                let resolved = Self.resolveModelAlias(modelName)
+                let target = modelsBase.appendingPathComponent(resolved)
+                guard fm.fileExists(atPath: target.path) else {
+                    print("Model not cached: \(resolved)")
+                    print("Models dir: \(modelsBase.path)")
+                    return
+                }
+                let size = directorySize(at: target)
+                print("Remove \(resolved) (\(formatBytes(size)))? [y/N] ", terminator: "")
+                fflush(stdout)
+                let answer = readLine()?.lowercased() ?? "n"
+                guard answer == "y" || answer == "yes" else {
+                    print("Cancelled.")
+                    return
+                }
+                try fm.removeItem(at: target)
+                print("Removed: \(target.path)")
+
+                // Clean HuggingFace download metadata for this model
+                let downloadCache = modelsBase
+                    .appendingPathComponent(".cache/huggingface/download")
+                    .appendingPathComponent(resolved)
+                if fm.fileExists(atPath: downloadCache.path) {
+                    try? fm.removeItem(at: downloadCache)
+                    print("Removed: \(downloadCache.path)")
+                }
+
+                // Clean openai/ tokenizer dir — only if no remaining model maps to it
+                let openaiRoot = cacheDir.appendingPathComponent("models/openai")
+                let remaining = (try? fm.contentsOfDirectory(at: modelsBase, includingPropertiesForKeys: nil))?
+                    .filter { $0.lastPathComponent != ".cache" } ?? []
+                if let openaiDir = Self.resolveOpenaiDir(for: resolved, in: openaiRoot, fm: fm) {
+                    let isShared = remaining.contains {
+                        Self.resolveOpenaiDir(for: $0.lastPathComponent, in: openaiRoot, fm: fm)?.path == openaiDir.path
+                    }
+                    if !isShared {
+                        try? fm.removeItem(at: openaiDir)
+                        print("Removed: \(openaiDir.path)")
+                    }
+                }
+
+                // If no model dirs remain, remove repo-level config.json and empty scaffold
+                if remaining.isEmpty {
+                    let repoConfig = modelsBase.appendingPathComponent("config.json")
+                    if fm.fileExists(atPath: repoConfig.path) {
+                        try? fm.removeItem(at: repoConfig)
+                        print("Removed: \(repoConfig.path)")
+                    }
+                    // Remove .cache dir too (only download metadata, now all stale)
+                    let cacheSubdir = modelsBase.appendingPathComponent(".cache")
+                    if fm.fileExists(atPath: cacheSubdir.path) {
+                        try? fm.removeItem(at: cacheSubdir)
+                        print("Removed: \(cacheSubdir.path)")
+                    }
+                }
+            } else {
+                guard fm.fileExists(atPath: modelsBase.path) else {
+                    print("No models cached yet (\(modelsBase.path))")
+                    return
+                }
+                let contents = (try? fm.contentsOfDirectory(
+                    at: modelsBase,
+                    includingPropertiesForKeys: [.isDirectoryKey]
+                )) ?? []
+                let dirs = contents.filter {
+                    $0.lastPathComponent != ".cache" &&
+                    (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+                }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+                if dirs.isEmpty {
+                    print("No models cached (\(modelsBase.path))")
+                } else {
+                    print("Cached models (\(modelsBase.path)):")
+                    for dir in dirs {
+                        let size = directorySize(at: dir)
+                        print("  \(dir.lastPathComponent)  \(formatBytes(size))")
+                    }
+                    print("\nUse --clean-model --model <name> to remove one.")
+                }
             }
             return
         }
@@ -152,14 +244,13 @@ struct YTSubtitles: AsyncParsableCommand {
         }
 
         let outputDir = FileManager.default.currentDirectoryPath
+        let effectiveModel = model ?? "small"
         // source always untouched; output gets model name or .subtitle to avoid conflict
         let modelSuffix: String
         if output != nil {
             modelSuffix = ""
-        } else if let m = model {
-            modelSuffix = ".\(m)"
         } else {
-            modelSuffix = ".subtitle"
+            modelSuffix = ".\(effectiveModel)"
         }
         let outputBase = URL(fileURLWithPath: outputDir).appendingPathComponent(baseName + modelSuffix)
 
@@ -180,7 +271,7 @@ struct YTSubtitles: AsyncParsableCommand {
         }
 
         let modelDirURL = modelDir.map { URL(fileURLWithPath: $0) }
-        let resolvedModel = model.map { Self.resolveModelAlias($0) }
+        let resolvedModel = Self.resolveModelAlias(effectiveModel)
         let transcriber = Transcriber(model: resolvedModel, language: lang, modelDir: modelDirURL, verbose: verbose)
         var segments = try await transcriber.transcribe(chunks: chunks)
 
@@ -286,5 +377,38 @@ struct YTSubtitles: AsyncParsableCommand {
         clean = clean.trimmingCharacters(in: .whitespaces)
         if clean.isEmpty { clean = "subtitles" }
         return clean
+    }
+
+    /// Maps `openai_whisper-<variant>` → `<openaiRoot>/whisper-<base>` by trying progressively
+    /// shorter suffixes until a matching directory exists.
+    /// e.g. "openai_whisper-large-v3-v20240930" → tries whisper-large-v3-v20240930,
+    ///      whisper-large-v3 (found), whisper-large, ...
+    private static func resolveOpenaiDir(for modelName: String, in openaiRoot: URL, fm: FileManager) -> URL? {
+        guard modelName.hasPrefix("openai_whisper-") else { return nil }
+        var parts = String(modelName.dropFirst("openai_whisper-".count)).components(separatedBy: "-")
+        while !parts.isEmpty {
+            let candidate = openaiRoot.appendingPathComponent("whisper-" + parts.joined(separator: "-"))
+            if fm.fileExists(atPath: candidate.path) { return candidate }
+            parts.removeLast()
+        }
+        return nil
+    }
+
+    private func directorySize(at url: URL) -> Int64 {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(at: url, includingPropertiesForKeys: [.fileSizeKey]) else { return 0 }
+        var total: Int64 = 0
+        for case let fileURL as URL in enumerator {
+            total += Int64((try? fileURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        let gb = Double(bytes) / 1_073_741_824
+        if gb >= 1 { return String(format: "%.1f GB", gb) }
+        let mb = Double(bytes) / 1_048_576
+        if mb >= 1 { return String(format: "%.0f MB", mb) }
+        return "\(bytes / 1024) KB"
     }
 }

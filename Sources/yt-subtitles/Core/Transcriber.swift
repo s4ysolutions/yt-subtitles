@@ -173,6 +173,16 @@ private func defaultModelDir() -> URL {
     return dir
 }
 
+extension Transcriber {
+    /// Returns the model cache directory. Respects an explicit override path if provided.
+    static func defaultModelCacheDir(override: String? = nil) -> URL {
+        if let override {
+            return URL(fileURLWithPath: override)
+        }
+        return defaultModelDir()
+    }
+}
+
 private func stderr() -> FileHandle { FileHandle.standardError }
 private extension FileHandle {
     func write(_ string: String) {

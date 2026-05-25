@@ -11,3 +11,4 @@ DerivedData/
 .idea/
 Sources/.idea/
 .claude/settings.local.json
+vectors.db

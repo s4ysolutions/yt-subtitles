@@ -58,7 +58,7 @@ yt-subtitles --local-audio audio.wav --lang sr               # → audio.subtitl
 | `--no-mux` | false | Skip video remux; produce subtitle file(s) only (default: SRT) |
 | `--srt` | false | Also write SRT subtitle file (combinable with mux or `--no-mux`) |
 | `--vtt` | false | Also write VTT subtitle file (combinable with mux or `--no-mux`) |
-| `--model` | auto | Whisper model: `tiny`, `base`, `small`, `large`, full name, or glob |
+| `--model` | small | Whisper model: `tiny`, `base`, `small`, `large`, full name, or glob |
 | `--lang` | auto-detect | Audio language code (e.g. `en`, `sr`); omit to detect from audio |
 | `--output` | derived | Override output base path; disables model suffix |
 | `--subtitles-lang` | from `--lang` | Language tag embedded in mp4 subtitle track |
@@ -69,23 +69,32 @@ yt-subtitles --local-audio audio.wav --lang sr               # → audio.subtitl
 | `--min-silence` | `1.5` | Minimum silence duration in seconds to split on |
 | `--model-dir` | `~/.yt-subtitles/models` | Override model cache directory |
 | `--list-models` | — | List available Whisper models and exit |
+| `--clean-model` | — | List cached models; with `--model <name>`: confirm + delete from cache |
 | `--verbose` | false | Detailed progress output |
 
 ## Output Naming
 
-Source file is never modified. Output gets model name or `.subtitle` as suffix:
+Source file is never modified. Output gets model name suffix (default: `.small`):
 
 | Input | Flag | Output |
 |---|---|---|
 | YouTube URL | `--model tiny` | `{title}.mp4` (kept) + `{title}.tiny.mp4` |
-| YouTube URL | *(no model)* | `{title}.mp4` (kept) + `{title}.subtitle.mp4` |
+| YouTube URL | *(no model)* | `{title}.mp4` (kept) + `{title}.small.mp4` |
 | `--local-video f.mp4` | `--model tiny` | `f.mp4` (untouched) + `f.tiny.mp4` |
-| `--local-video f.mp4` | *(no model)* | `f.mp4` (untouched) + `f.subtitle.mp4` |
+| `--local-video f.mp4` | *(no model)* | `f.mp4` (untouched) + `f.small.mp4` |
 | any | `--output name` | `name` (no suffix appended) |
 
 ## Model Cache
 
-Models download to `~/.yt-subtitles/models/`. First run downloads ~800 MB + Core ML compile (1–2 min). Subsequent runs load compiled models from cache (seconds).
+Models download to `~/.yt-subtitles/models/`. WhisperKit stores them at:
+`~/.yt-subtitles/models/models/argmaxinc/whisperkit-coreml/<model-name>/`
+
+First run downloads ~800 MB + Core ML compile (1–2 min). Subsequent runs load compiled models from cache (seconds).
+
+```bash
+yt-subtitles --clean-model                   # list cached models with sizes
+yt-subtitles --clean-model --model tiny      # confirm + delete openai_whisper-tiny
+```
 
 ## Run Tests
 

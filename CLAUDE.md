@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Current State
 Swift CLI for YouTube subtitle generation. Full pipeline working end-to-end: YouTube URL or local video → transcribe → mux subtitled mp4. 28 unit tests pass.
 
-Recent work: unified mp4 pipeline (yt-dlp `--merge-output-format mp4`); `--local-video` (any ffmpeg format, identical pipeline to YouTube minus download); `--no-mux`/`--srt`/`--vtt` flags replace old `--subtitle-only`/`--format`; `--model` aliases (tiny/base/small/large); auto-transliteration by lang (sr→cyr, hr→lat); output naming preserves source — model name or `.subtitle` suffix differentiates output from input; YouTube source video saved to CWD (persistent, re-used on subsequent runs to try different models).
+Recent work: unified mp4 pipeline (yt-dlp `--merge-output-format mp4`); `--local-video` (any ffmpeg format, identical pipeline to YouTube minus download); `--no-mux`/`--srt`/`--vtt` flags replace old `--subtitle-only`/`--format`; `--model` aliases (tiny/base/small/large); auto-transliteration by lang (sr→cyr, hr→lat); output naming preserves source — model name suffix differentiates output from input (default: .small); YouTube source video saved to CWD (persistent, re-used on subsequent runs to try different models).
 
 ## Build & Test Commands
 ```bash
@@ -15,37 +15,8 @@ swift test                                       # 28 unit tests
 swift test --filter <TestName>                   # Single test
 ```
 
-## Usage
-```bash
-# YouTube → download + transcribe + mux → {title}.tiny.mp4 (source kept as {title}.mp4)
-yt-subtitles "https://youtube.com/..." --lang sr --model tiny
-
-# Re-run with different model — skips download, uses cached {title}.mp4
-yt-subtitles "https://youtube.com/..." --lang sr --model small
-
-# Local video — identical pipeline, no download step
-yt-subtitles --local-video video.mp4 --lang sr --model tiny  # → video.tiny.mp4
-yt-subtitles --local-video video.mp4 --lang sr               # → video.subtitle.mp4
-
-# --srt/--vtt are additive: produce subtitle files AND mux (unless --no-mux)
-yt-subtitles "https://youtube.com/..." --srt                  # → {title}.subtitle.mp4 + {title}.subtitle.srt
-yt-subtitles "https://youtube.com/..." --srt --vtt            # → {title}.subtitle.mp4 + .srt + .vtt
-
-# Subtitle files only, no remux (requires --no-mux)
-yt-subtitles "https://youtube.com/..." --no-mux               # → {title}.subtitle.srt (default SRT)
-yt-subtitles "https://youtube.com/..." --no-mux --srt --vtt   # → {title}.subtitle.srt + .vtt
-yt-subtitles --local-audio audio.wav --lang sr                # → audio.subtitle.srt (audio-only, always no mux)
-
-yt-subtitles --list-models                                    # list available Whisper models
-```
-
-## Output Naming
-Source file is never modified. Output gets model name or `.subtitle` as suffix:
-- YouTube `--model tiny` → `{title}.mp4` (source, kept) + `{title}.tiny.mp4` (output)
-- YouTube no model   → `{title}.mp4` (source, kept) + `{title}.subtitle.mp4` (output)
-- `--local-video f.mp4 --model tiny` → `f.mp4` (untouched) + `f.tiny.mp4`
-- `--local-video f.mp4` (no model) → `f.mp4` (untouched) + `f.subtitle.mp4`
-- `--output name` → overrides base name entirely, no suffix appended
+## Usage & Output Naming
+See README.md. Key implementation detail: `--srt`/`--vtt` are additive (produce files AND mux unless `--no-mux`). `--no-mux` or audio-only input disables mux entirely.
 
 ## Language & Tooling
 - Swift only. SPM only. macOS 14+.
@@ -90,28 +61,25 @@ Tests/yt-subtitlesTests/
 10. If mp4 output (not `--no-mux`, not audio-only): write SRT to tempDir (intermediate), `Muxer.muxLocal()` → `{base}{modelSuffix}.mp4`. Steps 8-9 may also run alongside this.
 
 ## CLI Flags
-| Flag | Default | Notes |
-|---|---|---|
-| `<youtube-url>` | — | Optional if --local-audio/--local-video set |
-| `--local-audio` | — | Path to local audio file; always subtitle-only (no video) |
-| `--local-video` | — | Path to local video file (any ffmpeg format) |
-| `--no-mux` | false | Skip video remux; produce subtitle file(s) only (default output: SRT) |
-| `--srt` | false | Write SRT subtitle file (additive; combinable with mux or `--no-mux`) |
-| `--vtt` | false | Write VTT subtitle file (additive; combinable with mux or `--no-mux`) |
-| `--model` | auto | tiny, base, small, large, full name, or glob; omit for recommended |
-| `--lang` | auto-detect | Language code (e.g. sr, hr, en); omit to detect from mid-audio |
-| `--translit` | auto | off, lat, cyr; auto: sr→cyr, hr→lat |
-| `--resolution` | 720p | 144p, 480p, 720p, 1080p |
-| `--output` | derived | Override output base name; disables model suffix |
-| `--subtitles-lang` | from --lang | Language tag embedded in mp4 subtitle track |
-| `--clean-artefacts` | false | Filter known Whisper hallucinations |
-| `--silence-threshold` | 0.01 | RMS threshold 0.0–1.0 |
-| `--min-silence` | 1.5 | Minimum silence seconds |
-| `--list-models` | — | Query HuggingFace, print models, exit |
-| `--verbose` | false | Detailed progress |
+Full option list in README.md. Non-obvious implementation details:
+- `--model` aliases resolved in `Entry.resolveModelAlias()`: tiny→`openai_whisper-tiny`, base→`openai_whisper-base`, small→`openai_whisper-small`, large→`openai_whisper-large-v3-v20240930`
+- `--translit auto`: sr→cyr, hr→lat; explicit `--translit off/lat/cyr` overrides
+- `--clean-model` (no `--model`): lists local cache; with `--model <name>`: confirm-delete
+- `--list-models`: queries HuggingFace (network); `--clean-model`: local cache only
 
 ## Model Cache
-Models downloaded to `~/.yt-subtitles/models/`. First run downloads ~800MB + Core ML compiles (1-2 min). Subsequent runs load compiled models from cache (few seconds).
+`downloadBase` = `~/.yt-subtitles/models/`; WhisperKit appends `models/<repo>/` internally. Full structure:
+```
+~/.yt-subtitles/models/models/
+  argmaxinc/whisperkit-coreml/
+    <model-name>/          ← main model (hundreds MB–GB)
+    .cache/huggingface/download/<model-name>/   ← download metadata (tiny)
+  openai/
+    whisper-<base>/        ← tokenizer files ~2.7MB each
+                             shared across variants:
+                             openai_whisper-large-v3-v20240930 → openai/whisper-large-v3
+```
+`--clean-model --model <name>` deletes all three layers. `resolveOpenaiDir()` in Entry.swift maps variant→base by progressively stripping trailing name components until a dir match is found; skips openai/ delete if another installed model still references the same dir.
 
 Download progress: dots spinner (one dot/sec) shown only while downloading; disappears for cached models. "Querying recommended model..." logged only with `--verbose`.
 
