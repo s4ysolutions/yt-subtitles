@@ -25,7 +25,14 @@ struct YAMNetDetector {
             return []
         }
         
-        let model = try MLModel(contentsOf: modelPath)
+        let compiledURL: URL
+        if modelPath.pathExtension == "mlpackage" {
+            compiledURL = try await MLModel.compileModel(at: modelPath)
+        } else {
+            compiledURL = modelPath
+        }
+        
+        let model = try MLModel(contentsOf: compiledURL)
         let audioSamples = try AudioProcessor.loadAudioAsFloatArray(fromPath: wavPath.path)
         
         var speechRegions: [SpeechRegion] = []
