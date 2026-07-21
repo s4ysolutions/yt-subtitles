@@ -1,3 +1,4 @@
+import CoreML
 import Foundation
 import WhisperKit
 
@@ -11,6 +12,8 @@ struct YAMNetDetector {
     let threshold: Float
     let segmentLength: Int = 15680 // 0.98s at 16kHz
     
+    private let featureExtractor = LogMelFeatureExtractor()
+    
     init(modelPath: URL, threshold: Float = 0.5) {
         self.modelPath = modelPath
         self.threshold = threshold
@@ -22,6 +25,7 @@ struct YAMNetDetector {
             return []
         }
         
+        let model = try MLModel(contentsOf: modelPath)
         let audioSamples = try AudioProcessor.loadAudioAsFloatArray(fromPath: wavPath.path)
         
         var speechRegions: [SpeechRegion] = []
@@ -32,7 +36,7 @@ struct YAMNetDetector {
         
         while i + segmentLength <= audioSamples.count {
             let segment = Array(audioSamples[i..<i+segmentLength])
-            let isSpeech = try await predictSpeech(segment: segment)
+            let isSpeech = try await predictSpeech(segment: segment, model: model)
             
             if isSpeech {
                 if currentRegionStart == nil {
@@ -55,12 +59,31 @@ struct YAMNetDetector {
         return mergeRegions(speechRegions)
     }
     
-    private func predictSpeech(segment: [Float]) async throws -> Bool {
-        // Placeholder: implement Core ML YAMNet inference here
-        // For now, use energy-based detection as fallback
-        let sumSq = segment.reduce(0) { $0 + $1 * $1 }
-        let rms = sqrtf(sumSq / Float(segment.count))
-        return rms > 0.01
+    private func predictSpeech(segment: [Float], model: MLModel) async throws -> Bool {
+        let patches = featureExtractor.extractFeatures(from: segment)
+        
+        for patch in patches {
+            let input = try MLDictionaryFeatureProvider(dictionary: [
+                "features": MLFeatureValue(multiArray: patch)
+            ])
+            
+            let output = try await model.prediction(from: input)
+            guard let scores = output.featureValue(for: "Identity")?.multiArrayValue else {
+                continue
+            }
+            
+            var speechScore: Float = 0
+            for classIdx in 0..<min(7, scores.count) {
+                let score = scores[[0, NSNumber(value: classIdx)]].floatValue
+                speechScore = max(speechScore, score)
+            }
+            
+            if speechScore > threshold {
+                return true
+            }
+        }
+        
+        return false
     }
     
     private func mergeRegions(_ regions: [SpeechRegion]) -> [SpeechRegion] {
