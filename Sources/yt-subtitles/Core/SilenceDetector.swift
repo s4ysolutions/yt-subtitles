@@ -108,4 +108,61 @@ struct SilenceDetector {
 
         return chunks
     }
+    
+    /// Merge YAMNet speech regions with RMS-detected chunks.
+    ///
+    /// This combines the strengths of both approaches:
+    /// - YAMNet: precise speech boundaries, catches quiet speech
+    /// - RMS: fine-grained splitting within speech regions
+    static func mergeWithYAMNet(
+        yamnetRegions: [SpeechRegion],
+        rmsChunks: [AudioChunk],
+        allSamples: [Float],
+        sampleRate: Int = 16000,
+        paddingSeconds: Float = 0.1
+    ) -> [AudioChunk] {
+        guard !yamnetRegions.isEmpty else {
+            return rmsChunks
+        }
+        
+        let paddingSamples = Int(paddingSeconds * Float(sampleRate))
+        var mergedChunks: [AudioChunk] = []
+        
+        for region in yamnetRegions {
+            let startSample = Int(region.start * Float(sampleRate))
+            let endSample = Int(region.end * Float(sampleRate))
+            
+            let clampedStart = max(0, startSample - paddingSamples)
+            let clampedEnd = min(allSamples.count, endSample + paddingSamples)
+            
+            guard clampedEnd > clampedStart else { continue }
+            
+            let regionSamples = Array(allSamples[clampedStart..<clampedEnd])
+            let offset = Float(clampedStart) / Float(sampleRate)
+            
+            let regionChunk = AudioChunk(samples: regionSamples, offsetSeconds: offset)
+            
+            let subChunks = detectChunks(
+                samples: regionSamples,
+                sampleRate: sampleRate,
+                threshold: 0.01,
+                minSilence: 0.5,
+                paddingSeconds: 0
+            )
+            
+            if subChunks.isEmpty {
+                mergedChunks.append(regionChunk)
+            } else {
+                for subChunk in subChunks {
+                    let absoluteOffset = offset + subChunk.offsetSeconds
+                    mergedChunks.append(AudioChunk(
+                        samples: subChunk.samples,
+                        offsetSeconds: absoluteOffset
+                    ))
+                }
+            }
+        }
+        
+        return mergedChunks.sorted { $0.offsetSeconds < $1.offsetSeconds }
+    }
 }
