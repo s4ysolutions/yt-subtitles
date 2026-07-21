@@ -7,12 +7,29 @@ struct Transcriber {
     let language: String?
     let modelDir: URL?
     let verbose: Bool
-
-    init(model: String? = nil, language: String? = nil, modelDir: URL? = nil, verbose: Bool = false) {
+    let qualityChecker: QualityChecker
+    let maxRetries: Int
+    let retryGainDB: Float
+    let retryTempo: Float
+    
+    init(
+        model: String? = nil,
+        language: String? = nil,
+        modelDir: URL? = nil,
+        verbose: Bool = false,
+        qualityChecker: QualityChecker = QualityChecker(),
+        maxRetries: Int = 1,
+        retryGainDB: Float = 6.0,
+        retryTempo: Float = 0.85
+    ) {
         self.model = model
         self.language = language
         self.modelDir = modelDir
         self.verbose = verbose
+        self.qualityChecker = qualityChecker
+        self.maxRetries = maxRetries
+        self.retryGainDB = retryGainDB
+        self.retryTempo = retryTempo
     }
 
     /// Transcribe audio chunks sequentially, returning segments with absolute timestamps.
@@ -118,51 +135,111 @@ struct Transcriber {
             chunkingStrategy: ChunkingStrategy.none
         )
 
+        let tempDir = try TempFileManager()
         var allSegments: [TranscriptionSegment] = []
         let total = chunks.count
 
         for (i, chunk) in chunks.enumerated() {
-            let dur = Float(chunk.samples.count) / 16000.0
-            sd.write("Transcribing chunk \(i + 1)/\(total) (\(String(format: "%.1f", dur))s)...")
-            let t0 = CFAbsoluteTimeGetCurrent()
-            let results = try await pipe.transcribe(audioArray: chunk.samples, decodeOptions: options)
-            let elapsed = CFAbsoluteTimeGetCurrent() - t0
-            let speed = dur / Float(elapsed)
-            let wallFmt = elapsed < 1.0
-                ? String(format: "%.0fms", elapsed * 1000)
-                : String(format: "%.1fs", elapsed)
-            sd.write(" ok, \(wallFmt) wall, \(String(format: "%.1f", speed))x realtime\n")
-
-            for result in results {
-                for segment in result.segments {
-                    let shifted = TranscriptionSegment(
-                        id: segment.id,
-                        seek: segment.seek,
-                        start: segment.start + chunk.offsetSeconds,
-                        end: segment.end + chunk.offsetSeconds,
-                        text: segment.text,
-                        tokens: segment.tokens,
-                        tokenLogProbs: segment.tokenLogProbs,
-                        temperature: segment.temperature,
-                        avgLogprob: segment.avgLogprob,
-                        compressionRatio: segment.compressionRatio,
-                        noSpeechProb: segment.noSpeechProb,
-                        words: segment.words?.map { word in
-                            WordTiming(
-                                word: word.word,
-                                tokens: word.tokens,
-                                start: word.start + chunk.offsetSeconds,
-                                end: word.end + chunk.offsetSeconds,
-                                probability: word.probability
-                            )
-                        }
-                    )
-                    allSegments.append(shifted)
+            var currentChunk = chunk
+            var attempt = 0
+            var chunkSegments: [TranscriptionSegment] = []
+            
+            while attempt <= maxRetries {
+                let dur = Float(currentChunk.samples.count) / 16000.0
+                sd.write("Transcribing chunk \(i + 1)/\(total) (\(String(format: "%.1f", dur))s)")
+                if attempt > 0 {
+                    sd.write(" [retry \(attempt)/\(maxRetries)]")
                 }
+                sd.write("...")
+                let t0 = CFAbsoluteTimeGetCurrent()
+                let results = try await pipe.transcribe(audioArray: currentChunk.samples, decodeOptions: options)
+                let elapsed = CFAbsoluteTimeGetCurrent() - t0
+                let speed = dur / Float(elapsed)
+                let wallFmt = elapsed < 1.0
+                    ? String(format: "%.0fms", elapsed * 1000)
+                    : String(format: "%.1fs", elapsed)
+                sd.write(" ok, \(wallFmt) wall, \(String(format: "%.1f", speed))x realtime\n")
+
+                chunkSegments = []
+                for result in results {
+                    for segment in result.segments {
+                        let shifted = TranscriptionSegment(
+                            id: segment.id,
+                            seek: segment.seek,
+                            start: segment.start + chunk.offsetSeconds,
+                            end: segment.end + chunk.offsetSeconds,
+                            text: segment.text,
+                            tokens: segment.tokens,
+                            tokenLogProbs: segment.tokenLogProbs,
+                            temperature: segment.temperature,
+                            avgLogprob: segment.avgLogprob,
+                            compressionRatio: segment.compressionRatio,
+                            noSpeechProb: segment.noSpeechProb,
+                            words: segment.words?.map { word in
+                                WordTiming(
+                                    word: word.word,
+                                    tokens: word.tokens,
+                                    start: word.start + chunk.offsetSeconds,
+                                    end: word.end + chunk.offsetSeconds,
+                                    probability: word.probability
+                                )
+                            }
+                        )
+                        chunkSegments.append(shifted)
+                    }
+                }
+                
+                let qualityResults = chunkSegments.map { qualityChecker.check($0) }
+                let allPass = qualityResults.allSatisfy { $0.pass }
+                
+                if allPass || attempt == maxRetries {
+                    break
+                }
+                
+                let failedReasons = qualityResults.filter { !$0.pass }.flatMap { $0.reasons }
+                sd.write("  Quality check failed: \(failedReasons.joined(separator: ", "))\n")
+                
+                let inputWAV = tempDir.path("chunk_\(chunk.offsetSeconds)_\(i).wav")
+                let outputWAV = tempDir.path("chunk_\(chunk.offsetSeconds)_\(i)_retry_\(attempt).wav")
+                
+                try writeWAV(samples: currentChunk.samples, to: inputWAV.path)
+                
+                try await AudioModifier.modifyForRetry(
+                    inputWAV: inputWAV,
+                    outputWAV: outputWAV,
+                    gainDB: retryGainDB,
+                    tempo: retryTempo
+                )
+                
+                let modifiedSamples = try AudioProcessor.loadAudioAsFloatArray(fromPath: outputWAV.path)
+                currentChunk = AudioChunk(samples: modifiedSamples, offsetSeconds: chunk.offsetSeconds)
+                
+                attempt += 1
             }
+            
+            allSegments.append(contentsOf: chunkSegments)
         }
 
         return allSegments
+    }
+    
+    private func writeWAV(samples: [Float], to path: String) throws {
+        let url = URL(fileURLWithPath: path)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        process.arguments = ["ffmpeg", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0", "-y", path]
+        
+        let pipe = Pipe()
+        process.standardInput = pipe
+        
+        try process.run()
+        
+        var int16Samples = samples.map { Int16(max(-32768, min(32767, $0 * 32767))) }
+        let data = Data(bytes: &int16Samples, count: int16Samples.count * MemoryLayout<Int16>.size)
+        pipe.fileHandleForWriting.write(data)
+        pipe.fileHandleForWriting.closeFile()
+        
+        process.waitUntilExit()
     }
 }
 
