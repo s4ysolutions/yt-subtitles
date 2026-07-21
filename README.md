@@ -72,6 +72,25 @@ yt-subtitles --local-audio audio.wav --lang sr               # → audio.subtitl
 | `--clean-model` | — | List cached models; with `--model <name>`: confirm + delete from cache |
 | `--verbose` | false | Detailed progress output |
 
+### YAMNet Speech Detection
+
+| Option | Default | Description |
+|---|---|---|
+| `--yamnet` / `--no-yamnet` | true | Enable/disable YAMNet speech detection |
+| `--yamnet-threshold` | `0.5` | Speech class probability threshold (0.0–1.0) |
+| `--yamnet-model` | `~/.yt-subtitles/models/yamnet.mlmodel` | Path to YAMNet Core ML model |
+
+### Quality Retry
+
+| Option | Default | Description |
+|---|---|---|
+| `--quality-threshold` | `0.7` | Word probability threshold for quality check |
+| `--avg-logprob-threshold` | `-0.7` | Segment avgLogprob threshold |
+| `--no-speech-prob-threshold` | `0.5` | Segment noSpeechProb threshold |
+| `--max-retries` | `1` | Max retry attempts per segment (0 = disabled) |
+| `--retry-gain-db` | `6.0` | Gain boost in dB for retry |
+| `--retry-tempo` | `0.85` | Tempo factor for retry (0.5–1.0) |
+
 ## Output Naming
 
 Source file is never modified. Output gets model name suffix (default: `.small`):
