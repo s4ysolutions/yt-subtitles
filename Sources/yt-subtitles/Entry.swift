@@ -65,6 +65,33 @@ struct YTSubtitles: AsyncParsableCommand {
     @Flag(help: "Manage cached models. Without --model: list downloaded models. With --model <name>: delete that model from cache.")
     var cleanModel = false
 
+    @Flag(help: "Enable YAMNet speech detection (default: on)")
+    var yamnet = true
+
+    @Option(help: "YAMNet speech confidence threshold (0.0–1.0)")
+    var yamnetThreshold: Float = 0.5
+
+    @Option(help: "Path to YAMNet Core ML model")
+    var yamnetModel: String? = nil
+
+    @Option(help: "Word probability threshold for quality check (0.0–1.0)")
+    var qualityThreshold: Float = 0.7
+
+    @Option(help: "AvgLogprob threshold for quality check (negative)")
+    var avgLogprobThreshold: Float = -0.7
+
+    @Option(help: "NoSpeechProb threshold for quality check (0.0–1.0)")
+    var noSpeechProbThreshold: Float = 0.5
+
+    @Option(help: "Max retry attempts per segment (0 = disabled)")
+    var maxRetries: Int = 1
+
+    @Option(help: "Gain boost in dB for retry")
+    var retryGainDB: Float = 6.0
+
+    @Option(help: "Tempo factor for retry (0.5–1.0)")
+    var retryTempo: Float = 0.85
+
     // MARK: - Entry
 
     mutating func run() async throws {
@@ -258,22 +285,64 @@ struct YTSubtitles: AsyncParsableCommand {
         debug("Loading audio...")
         let samples = try AudioProcessor.loadAudioAsFloatArray(fromPath: wavPath.path)
 
-        debug("Detecting speech segments...")
-        let chunks = SilenceDetector.detectChunks(
-            samples: samples,
-            threshold: silenceThreshold,
-            minSilence: minSilence
-        )
-        info("Found \(chunks.count) speech chunk(s).")
-        guard !chunks.isEmpty else {
+        var finalChunks: [AudioChunk]
+        if yamnet {
+            let yamnetModelPath = URL(fileURLWithPath: yamnetModel ?? defaultYAMNetModelPath())
+            let yamnetDetector = YAMNetDetector(modelPath: yamnetModelPath, threshold: yamnetThreshold)
+            
+            debug("Running YAMNet speech detection...")
+            let speechRegions = try await yamnetDetector.detectSpeechSegments(wavPath: wavPath)
+            info("YAMNet detected \(speechRegions.count) speech region(s).")
+            
+            debug("Detecting speech segments with RMS...")
+            let rmsChunks = SilenceDetector.detectChunks(
+                samples: samples,
+                threshold: silenceThreshold,
+                minSilence: minSilence
+            )
+            info("RMS detected \(rmsChunks.count) chunk(s).")
+            
+            finalChunks = SilenceDetector.mergeWithYAMNet(
+                yamnetRegions: speechRegions,
+                rmsChunks: rmsChunks,
+                allSamples: samples
+            )
+            info("Final chunks after merge: \(finalChunks.count)")
+        } else {
+            debug("Detecting speech segments...")
+            finalChunks = SilenceDetector.detectChunks(
+                samples: samples,
+                threshold: silenceThreshold,
+                minSilence: minSilence
+            )
+            info("Found \(finalChunks.count) speech chunk(s).")
+        }
+        
+        guard !finalChunks.isEmpty else {
             info("No speech detected — stopping. Provide --lang to skip auto-detection or lower --silence-threshold.")
             return
         }
 
         let modelDirURL = modelDir.map { URL(fileURLWithPath: $0) }
         let resolvedModel = Self.resolveModelAlias(effectiveModel)
-        let transcriber = Transcriber(model: resolvedModel, language: lang, modelDir: modelDirURL, verbose: verbose)
-        var segments = try await transcriber.transcribe(chunks: chunks)
+        
+        let qualityChecker = QualityChecker(
+            avgLogprobThreshold: avgLogprobThreshold,
+            noSpeechProbThreshold: noSpeechProbThreshold,
+            wordProbThreshold: qualityThreshold
+        )
+        
+        let transcriber = Transcriber(
+            model: resolvedModel,
+            language: lang,
+            modelDir: modelDirURL,
+            verbose: verbose,
+            qualityChecker: qualityChecker,
+            maxRetries: maxRetries,
+            retryGainDB: retryGainDB,
+            retryTempo: retryTempo
+        )
+        var segments = try await transcriber.transcribe(chunks: finalChunks)
 
         if cleanArtefacts {
             let before = segments.count
@@ -410,5 +479,10 @@ struct YTSubtitles: AsyncParsableCommand {
         let mb = Double(bytes) / 1_048_576
         if mb >= 1 { return String(format: "%.0f MB", mb) }
         return "\(bytes / 1024) KB"
+    }
+    
+    private func defaultYAMNetModelPath() -> String {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".yt-subtitles/models/yamnet.mlmodel").path
     }
 }
