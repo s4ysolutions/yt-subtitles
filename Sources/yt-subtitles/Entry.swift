@@ -483,6 +483,6 @@ struct YTSubtitles: AsyncParsableCommand {
     
     private func defaultYAMNetModelPath() -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".yt-subtitles/models/yamnet.mlmodel").path
+        return home.appendingPathComponent(".yt-subtitles/models/yamnet.mlpackage").path
     }
 }
