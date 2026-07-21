@@ -224,7 +224,6 @@ struct Transcriber {
     }
     
     private func writeWAV(samples: [Float], to path: String) throws {
-        let url = URL(fileURLWithPath: path)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["ffmpeg", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0", "-y", path]
