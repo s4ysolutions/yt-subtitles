@@ -11,6 +11,7 @@ struct Transcriber {
     let maxRetries: Int
     let retryGainDB: Float
     let retryTempo: Float
+    let showText: Bool
     
     init(
         model: String? = nil,
@@ -20,7 +21,8 @@ struct Transcriber {
         qualityChecker: QualityChecker? = nil,
         maxRetries: Int = 1,
         retryGainDB: Float = 6.0,
-        retryTempo: Float = 0.85
+        retryTempo: Float = 0.85,
+        showText: Bool = false
     ) {
         self.model = model
         self.language = language
@@ -30,6 +32,7 @@ struct Transcriber {
         self.maxRetries = maxRetries
         self.retryGainDB = retryGainDB
         self.retryTempo = retryTempo
+        self.showText = showText
     }
 
     /// Transcribe audio chunks sequentially, returning segments with absolute timestamps.
@@ -163,7 +166,7 @@ struct Transcriber {
                 let wallFmt = elapsed < 1.0
                     ? String(format: "%.0fms", elapsed * 1000)
                     : String(format: "%.1fs", elapsed)
-                sd.write(" ok, \(wallFmt) wall, \(String(format: "%.1f", speed))x realtime\n")
+                sd.write(" ok, \(wallFmt) wall, \(String(format: "%.1f", speed))x realtime")
 
                 chunkSegments = []
                 for result in results {
@@ -203,6 +206,18 @@ struct Transcriber {
                         chunkSegments.append(shifted)
                     }
                 }
+
+                let textPreview = chunkSegments.map { $0.text }.joined(separator: " | ").trimmingCharacters(in: .whitespacesAndNewlines)
+                let displayText: String
+                if showText {
+                    displayText = textPreview
+                } else {
+                    displayText = textPreview.count > 25 ? String(textPreview.prefix(25)) + "..." : textPreview
+                }
+                if !displayText.isEmpty {
+                    sd.write(" \"\(displayText)\"")
+                }
+                sd.write("\n")
                 
                 if let qc = qualityChecker {
                     let qualityResults = chunkSegments.map { qc.check($0) }

@@ -53,6 +53,9 @@ struct YTSubtitles: AsyncParsableCommand {
     @Flag(help: "Print detailed progress")
     var verbose = false
 
+    @Flag(help: "Show full transcribed text in progress (default: ellipsed to 25 chars)")
+    var showText = false
+
     @Flag(help: "List available Whisper models from HuggingFace and exit")
     var listModels = false
 
@@ -315,7 +318,8 @@ struct YTSubtitles: AsyncParsableCommand {
             qualityChecker: qualityChecker,
             maxRetries: maxRetries,
             retryGainDB: retryGainDB,
-            retryTempo: retryTempo
+            retryTempo: retryTempo,
+            showText: showText
         )
         debug("Starting transcription...")
         var segments = try await transcriber.transcribe(chunks: finalChunks)
