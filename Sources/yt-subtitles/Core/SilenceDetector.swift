@@ -42,7 +42,7 @@ struct SilenceDetector {
         leadInSeconds: Float = 0.3,
         tailPadSeconds: Float = 0.1,
         windowSeconds: Float = 9.0,
-        strideSeconds: Float = 5.0,
+        strideSeconds: Float = 7.0,
         snapSearchSeconds: Float = 1.5,
         silenceFrameSeconds: Float = 0.02,
         silenceRMSThreshold: Float = 0.01
@@ -135,6 +135,92 @@ struct SilenceDetector {
         }
 
         debug("regionsToChunks: done, \(chunks.count) total chunks.")
+        return chunks
+    }
+
+    /// Simple RMS-based chunking: accumulate speech up to `maxDuration` seconds.
+    /// Transcribe window == keep window (no overlap, no complex ownership).
+    /// When maxDuration reached, cut at the nearest silence boundary (not mid-word).
+    /// If no silence found, allow exceeding maxDuration up to the next silence.
+    static func rmsChunks(
+        allSamples: [Float],
+        sampleRate: Int = 16000,
+        maxDuration: Float = 9.0,
+        rmsThreshold: Float = 0.01,
+        frameSeconds: Float = 0.02,
+        silenceGapSeconds: Float = 0.5
+    ) -> [AudioChunk] {
+        let sr = Float(sampleRate)
+        let frameSamples = max(1, Int(frameSeconds * sr))
+        let maxSamples = Int(maxDuration * sr)
+        let silenceGapFrames = max(1, Int(silenceGapSeconds / frameSeconds))
+
+        var chunks: [AudioChunk] = []
+        var chunkStart: Int = 0
+        var silenceStartFrame: Int = -1
+        var hasExceededMax = false
+
+        func emitChunk(end: Int) {
+            guard end > chunkStart else { return }
+            chunks.append(makeChunk(
+                allSamples: allSamples, sr: sr,
+                start: chunkStart, end: end,
+                keepStart: Float(chunkStart) / sr,
+                keepEnd: Float(end) / sr
+            ))
+            chunkStart = end
+            silenceStartFrame = -1
+            hasExceededMax = false
+        }
+
+        var i = 0
+        while i < allSamples.count {
+            let frameEnd = min(i + frameSamples, allSamples.count)
+            let rms = frameRMS(allSamples, i, frameEnd, frameEnd - i)
+            let frameIndex = i / frameSamples
+            let isSpeech = rms > rmsThreshold
+
+            if isSpeech {
+                // If we were in a silence gap and now found speech,
+                // and we've exceeded maxDuration, cut in the middle of the silence.
+                if hasExceededMax && silenceStartFrame >= 0 {
+                    let cutFrame = (silenceStartFrame + frameIndex) / 2
+                    let cutSample = cutFrame * frameSamples
+                    emitChunk(end: cutSample)
+                }
+                silenceStartFrame = -1
+            } else {
+                // Silence frame
+                if silenceStartFrame < 0 {
+                    silenceStartFrame = frameIndex
+                }
+
+                let silenceLength = frameIndex - silenceStartFrame
+                let currentDuration = i - chunkStart
+
+                // If we've exceeded max duration and have a long enough silence, cut here
+                if currentDuration >= maxSamples && silenceLength >= silenceGapFrames {
+                    let cutFrame = silenceStartFrame + silenceLength / 2
+                    let cutSample = min(cutFrame * frameSamples, allSamples.count)
+                    emitChunk(end: cutSample)
+                }
+            }
+
+            let currentDuration = i - chunkStart
+            if currentDuration >= maxSamples {
+                hasExceededMax = true
+            }
+
+            i += frameSamples
+        }
+
+        // Handle remaining audio
+        let end = allSamples.count
+        if end > chunkStart {
+            emitChunk(end: end)
+        }
+
+        debug("rmsChunks: done, \(chunks.count) total chunks.")
         return chunks
     }
 

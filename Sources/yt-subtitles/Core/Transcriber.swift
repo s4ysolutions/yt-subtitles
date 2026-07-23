@@ -150,7 +150,8 @@ struct Transcriber {
             
             while attempt <= maxRetries {
                 let dur = Float(currentChunk.samples.count) / 16000.0
-                sd.write("Transcribing chunk \(i + 1)/\(total) (\(String(format: "%.1f", dur))s)")
+                let startTs = String(format: "%.2f", currentChunk.offsetSeconds)
+                sd.write("Transcribing chunk \(i + 1)/\(total) [\(startTs)s] (\(String(format: "%.1f", dur))s)")
                 if attempt > 0 {
                     sd.write(" [retry \(attempt)/\(maxRetries)]")
                 }

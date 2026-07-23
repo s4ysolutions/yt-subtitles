@@ -65,6 +65,8 @@ yt-subtitles --local-audio audio.wav --lang sr               # → audio.subtitl
 | `--translit` | auto | Script conversion: `off`, `lat`, `cyr`; auto: sr→cyr, hr→lat |
 | `--resolution` | `720p` | Video resolution: `144p`, `480p`, `720p`, `1080p` |
 | `--clean-artefacts` | false | Filter known Whisper hallucination phrases |
+| `--rms` | false | Use RMS-based chunking (default) |
+| `--yamnet` | false | Use YAMNet speech-detection chunking |
 | `--silence-threshold` | `0.01` | RMS threshold for silence detection (0.0–1.0) |
 | `--min-silence` | `1.5` | Minimum silence duration in seconds to split on |
 | `--model-dir` | `~/.yt-subtitles/models` | Override model cache directory |
@@ -84,12 +86,25 @@ yt-subtitles --local-audio audio.wav --lang sr               # → audio.subtitl
 
 | Option | Default | Description |
 |---|---|---|
-| `--quality-threshold` | `0.7` | Word probability threshold for quality check |
+| `--quality-threshold` | `0.45` | Word probability threshold for quality check |
 | `--avg-logprob-threshold` | `-0.7` | Segment avgLogprob threshold |
 | `--no-speech-prob-threshold` | `0.5` | Segment noSpeechProb threshold |
 | `--max-retries` | `1` | Max retry attempts per segment (0 = disabled) |
 | `--retry-gain-db` | `6.0` | Gain boost in dB for retry |
 | `--retry-tempo` | `0.85` | Tempo factor for retry (0.5–1.0) |
+
+## Audio Chunking Strategy
+
+Two strategies are available, selected by `--rms` (default) or `--yamnet`:
+
+### RMS (default)
+Simple silence detection using RMS energy. Speech regions are accumulated into chunks up to 9 seconds. Each chunk's transcribe duration equals its subtitle duration — no overlap, no complex ownership logic.
+
+### YAMNet (`--yamnet`)
+Speech detection via RMS-based analysis, then complex tiling:
+- 9s windows with 7s stride (2s overlap)
+- Audio boundaries extended to nearest silence frame (≤1.5s search)
+- Separate "keep windows" for subtitle ownership assignment
 
 ## Output Naming
 

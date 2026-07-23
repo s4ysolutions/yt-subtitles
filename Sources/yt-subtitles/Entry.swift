@@ -63,7 +63,7 @@ struct YTSubtitles: AsyncParsableCommand {
     var qualityCheck = false
 
     @Option(help: "Word probability threshold for quality check (0.0–1.0)")
-    var qualityThreshold: Float = 0.7
+    var qualityThreshold: Float = 0.45
 
     @Option(help: "AvgLogprob threshold for quality check (negative)")
     var avgLogprobThreshold: Float = -0.7
@@ -79,6 +79,12 @@ struct YTSubtitles: AsyncParsableCommand {
 
     @Option(help: "Tempo factor for retry (0.5–1.0)")
     var retryTempo: Float = 0.85
+
+    @Flag(help: "Use RMS-based chunking (default)")
+    var rms = false
+
+    @Flag(help: "Use YAMNet speech-detection chunking")
+    var yamnet = false
 
     // MARK: - Entry
 
@@ -274,16 +280,24 @@ struct YTSubtitles: AsyncParsableCommand {
         let samples = try AudioProcessor.loadAudioAsFloatArray(fromPath: wavPath.path)
 
         debug("Running speech detection...")
-        let detector = YAMNetDetector()
-        let speechRegions = try await detector.detectSpeechSegments(wavPath: wavPath)
-        info("Found \(speechRegions.count) speech region(s).")
-
-        debug("Entering regionsToChunks...")
-        let finalChunks = SilenceDetector.regionsToChunks(
-            yamnetRegions: speechRegions,
-            allSamples: samples
-        )
-        debug("regionsToChunks done.")
+        let finalChunks: [AudioChunk]
+        if yamnet {
+            let detector = YAMNetDetector()
+            let speechRegions = try await detector.detectSpeechSegments(wavPath: wavPath)
+            info("Found \(speechRegions.count) speech region(s).")
+            debug("Entering regionsToChunks...")
+            finalChunks = SilenceDetector.regionsToChunks(
+                yamnetRegions: speechRegions,
+                allSamples: samples
+            )
+            debug("regionsToChunks done.")
+        } else {
+            debug("Using RMS chunking strategy...")
+            finalChunks = SilenceDetector.rmsChunks(
+                allSamples: samples,
+                sampleRate: 16000
+            )
+        }
         info("\(finalChunks.count) chunk(s) after splitting.")
 
         guard !finalChunks.isEmpty else {
