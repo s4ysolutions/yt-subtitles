@@ -83,9 +83,6 @@ struct YTSubtitles: AsyncParsableCommand {
     @Flag(help: "Use RMS-based chunking (default)")
     var rms = false
 
-    @Flag(help: "Use YAMNet speech-detection chunking")
-    var yamnet = false
-
     // MARK: - Entry
 
     mutating func run() async throws {
@@ -280,24 +277,11 @@ struct YTSubtitles: AsyncParsableCommand {
         let samples = try AudioProcessor.loadAudioAsFloatArray(fromPath: wavPath.path)
 
         debug("Running speech detection...")
-        let finalChunks: [AudioChunk]
-        if yamnet {
-            let detector = YAMNetDetector()
-            let speechRegions = try await detector.detectSpeechSegments(wavPath: wavPath)
-            info("Found \(speechRegions.count) speech region(s).")
-            debug("Entering regionsToChunks...")
-            finalChunks = SilenceDetector.regionsToChunks(
-                yamnetRegions: speechRegions,
-                allSamples: samples
-            )
-            debug("regionsToChunks done.")
-        } else {
-            debug("Using RMS chunking strategy...")
-            finalChunks = SilenceDetector.rmsChunks(
-                allSamples: samples,
-                sampleRate: 16000
-            )
-        }
+        debug("Using RMS chunking strategy...")
+        let finalChunks = SilenceDetector.rmsChunks(
+            allSamples: samples,
+            sampleRate: 16000
+        )
         info("\(finalChunks.count) chunk(s) after splitting.")
 
         guard !finalChunks.isEmpty else {

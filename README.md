@@ -65,22 +65,12 @@ yt-subtitles --local-audio audio.wav --lang sr               # → audio.subtitl
 | `--translit` | auto | Script conversion: `off`, `lat`, `cyr`; auto: sr→cyr, hr→lat |
 | `--resolution` | `720p` | Video resolution: `144p`, `480p`, `720p`, `1080p` |
 | `--clean-artefacts` | false | Filter known Whisper hallucination phrases |
-| `--rms` | false | Use RMS-based chunking (default) |
-| `--yamnet` | false | Use YAMNet speech-detection chunking |
 | `--silence-threshold` | `0.01` | RMS threshold for silence detection (0.0–1.0) |
 | `--min-silence` | `1.5` | Minimum silence duration in seconds to split on |
 | `--model-dir` | `~/.yt-subtitles/models` | Override model cache directory |
 | `--list-models` | — | List available Whisper models and exit |
 | `--clean-model` | — | List cached models; with `--model <name>`: confirm + delete from cache |
 | `--verbose` | false | Detailed progress output |
-
-### YAMNet Speech Detection
-
-| Option | Default | Description |
-|---|---|---|
-| `--yamnet` / `--no-yamnet` | true | Enable/disable YAMNet speech detection |
-| `--yamnet-threshold` | `0.5` | Speech class probability threshold (0.0–1.0) |
-| `--yamnet-model` | `~/.yt-subtitles/models/yamnet.mlmodel` | Path to YAMNet Core ML model |
 
 ### Quality Retry
 
@@ -95,16 +85,9 @@ yt-subtitles --local-audio audio.wav --lang sr               # → audio.subtitl
 
 ## Audio Chunking Strategy
 
-Two strategies are available, selected by `--rms` (default) or `--yamnet`:
+Speech is accumulated into chunks up to 9 seconds. When the limit is reached, the algorithm tries to cut at a silence boundary — **backward first** (most recent silence midpoint), falling back to forward (next silence) if backward would produce a chunk shorter than 2 seconds. This prevents cutting words mid-utterance while keeping chunks reasonable. Chunks can exceed 9s if needed to reach a clean silence boundary.
 
-### RMS (default)
-Simple silence detection using RMS energy. Speech regions are accumulated into chunks up to 9 seconds. Each chunk's transcribe duration equals its subtitle duration — no overlap, no complex ownership logic.
-
-### YAMNet (`--yamnet`)
-Speech detection via RMS-based analysis, then complex tiling:
-- 9s windows with 7s stride (2s overlap)
-- Audio boundaries extended to nearest silence frame (≤1.5s search)
-- Separate "keep windows" for subtitle ownership assignment
+Audio fed to Whisper includes 0.25s context padding on each side (beyond the subtitle boundaries) so Whisper sees word beginnings/endings that might otherwise be clipped. Subtitles are unaffected — timestamps and boundaries remain at the original speech edges.
 
 ## Output Naming
 

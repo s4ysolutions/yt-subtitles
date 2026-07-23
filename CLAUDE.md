@@ -52,9 +52,7 @@ Tests/yt-subtitlesTests/
 1. YouTube + mp4: `AudioExtractor.downloadVideo()` → yt-dlp `--merge-output-format mp4` saved to CWD as `{title}.mp4`; skip if already exists. YouTube + subtitle-only: audio-only download to tempDir.
 2. `--local-video`: use file directly, no download. `--local-audio`: audio file, implies subtitle-only.
 3. ffmpeg → 16kHz mono WAV in tempDir (from downloaded video, local video, or local audio)
-4. Chunking (via `--rms`/`--yamnet` flags):
-   - **rms** (default): Simple RMS-based accumulation. Speech regions detected by RMS energy, accumulated into chunks up to 9s. Transcribe window == keep window.
-   - **yamnet** (`--yamnet`): YAMNet speech regions padded 0.3s lead-in / 0.1s tail. Regions ≤ 9s → one chunk; longer regions tiled on a 9s window / 7s stride grid. Two windows per chunk: (a) transcribe audio window grown *outward* to nearest 20ms RMS-silence frame; (b) keep-window for subtitle ownership, border = middle of nominal overlap.
+4. Chunking: RMS-based accumulation. Speech regions detected by RMS energy, accumulated into chunks up to 9s. When limit reached, cut at silence boundary — backward first (most recent silence midpoint), forward fallback if backward would produce <2s chunk. Audio fed to Whisper padded 0.25s outward for context; subtitle boundaries unchanged.
 5. Guard: if chunks empty → print message + return. If --lang not set: auto-detect from mid-audio chunk (1/3 through)
 6. WhisperKit transcribe each chunk, drop segments whose midpoint falls outside the chunk's keep-window (overlap dedup), shift timestamps by chunk offset, report wall time + realtime speed
 7. Auto-transliterate: sr→cyr, hr→lat unless `--translit` explicitly set. `--translit off` disables.
@@ -68,7 +66,6 @@ Full option list in README.md. Non-obvious implementation details:
 - `--translit auto`: sr→cyr, hr→lat; explicit `--translit off/lat/cyr` overrides
 - `--clean-model` (no `--model`): lists local cache; with `--model <name>`: confirm-delete
 - `--list-models`: queries HuggingFace (network); `--clean-model`: local cache only
-- `--rms`: simple RMS-based chunking (default); `--yamnet`: YAMNet speech detection + tiling
 
 ## Model Cache
 `downloadBase` = `~/.yt-subtitles/models/`; WhisperKit appends `models/<repo>/` internally. Full structure:

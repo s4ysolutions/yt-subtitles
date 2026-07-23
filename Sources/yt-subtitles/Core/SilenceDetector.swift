@@ -1,176 +1,64 @@
 import Foundation
 
 struct AudioChunk {
-    /// Audio fed to Whisper. Its boundaries are extended *outward* to the
-    /// nearest RMS silence so no word is cut and Whisper gets full context.
+    /// Audio fed to Whisper. May include context padding beyond subtitle boundaries.
     let samples: [Float]
-    /// Absolute time (seconds) of the first sample in `samples`. Whisper
-    /// timestamps are relative to this.
+    /// Absolute time (seconds) of the original chunk start (before padding).
+    /// Whisper timestamps are relative to this.
     let offsetSeconds: Float
-    /// Absolute time window (seconds) this chunk is *responsible* for. This is
-    /// distinct from the audio window: neighbouring chunks overlap in audio for
-    /// context, but each transcribed segment is kept only by the chunk whose
-    /// keep-window contains the segment midpoint. The border between two
-    /// neighbours sits in the middle of their overlap.
+    /// Absolute time window (seconds) this chunk is *responsible* for subtitles.
+    /// Segments are kept only if their midpoint falls within this window.
     let keepStart: Float
     let keepEnd: Float
 }
 
 struct SilenceDetector {
 
-    /// Convert YAMNet speech regions to overlapping chunks.
-    ///
-    /// Two windows are tracked separately per chunk:
-    ///
-    /// 1. Transcribe window (audio): regions are tiled on a stride grid
-    ///    (`windowSeconds` long, stepped by `strideSeconds`). Each tile is then
-    ///    grown *outward* to the nearest RMS silence — start moves backward, end
-    ///    moves forward — so chunks never begin or end mid-word and Whisper sees
-    ///    generous context. Adjacent audio windows overlap heavily.
-    ///
-    /// 2. Keep window (subtitle ownership): the border between two neighbours is
-    ///    the middle of their (nominal) overlap. Segments are assigned by
-    ///    midpoint, so a boundary word may occasionally appear in both
-    ///    neighbours — acceptable, and better than cutting it.
-    ///
-    /// The first region start also gets a `leadInSeconds` breath so Whisper can
-    /// catch the very first sound.
-    static func regionsToChunks(
-        yamnetRegions: [SpeechRegion],
-        allSamples: [Float],
-        sampleRate: Int = 16000,
-        leadInSeconds: Float = 0.3,
-        tailPadSeconds: Float = 0.1,
-        windowSeconds: Float = 9.0,
-        strideSeconds: Float = 7.0,
-        snapSearchSeconds: Float = 1.5,
-        silenceFrameSeconds: Float = 0.02,
-        silenceRMSThreshold: Float = 0.01
-    ) -> [AudioChunk] {
-        guard !yamnetRegions.isEmpty else {
-            debug("regionsToChunks: no regions, returning empty.")
-            return []
-        }
-
-        let sr = Float(sampleRate)
-        let windowSamples = Int(windowSeconds * sr)
-        let strideSamples = Int(strideSeconds * sr)
-        let snapSearchSamples = Int(snapSearchSeconds * sr)
-        let frameSamples = max(1, Int(silenceFrameSeconds * sr))
-
-        var chunks: [AudioChunk] = []
-        let logInterval = max(1, yamnetRegions.count / 10)
-
-        for (idx, region) in yamnetRegions.enumerated() {
-            if idx % logInterval == 0 {
-                debug("regionsToChunks: processing region \(idx)/\(yamnetRegions.count)...")
-            }
-            let startSample = max(0, Int(region.start * sr) - Int(leadInSeconds * sr))
-            let endSample = min(allSamples.count, Int(region.end * sr) + Int(tailPadSeconds * sr))
-            guard endSample > startSample else { continue }
-
-            // Short region: single chunk, owns everything it covers.
-            if endSample - startSample <= windowSamples {
-                chunks.append(makeChunk(
-                    allSamples: allSamples, sr: sr,
-                    start: startSample, end: endSample,
-                    keepStart: Float(startSample) / sr - 0.25,
-                    keepEnd: Float(endSample) / sr + 0.25
-                ))
-                continue
-            }
-
-            // Nominal overlapping windows on a stride grid (drives keep borders).
-            var nominal: [(start: Int, end: Int)] = []
-            var pos = startSample
-            while true {
-                let nominalEnd = pos + windowSamples
-                if nominalEnd >= endSample {
-                    nominal.append((pos, endSample))
-                    break
-                }
-                nominal.append((pos, nominalEnd))
-                pos += strideSamples
-            }
-
-            // Keep borders: middle of each nominal overlap. Subtitle ownership
-            // is split here; segments are then assigned by midpoint.
-            var borders: [Float] = []
-            for i in 0..<(nominal.count - 1) {
-                let overlapMid = (Float(nominal[i + 1].start) + Float(nominal[i].end)) / 2.0
-                borders.append(overlapMid / sr)
-            }
-
-            for (i, n) in nominal.enumerated() {
-                // Transcribe window: grow outward to nearest silence.
-                // First region edge / last region edge stay put (already padded).
-                let transStart = i == 0
-                    ? n.start
-                    : snapBackToSilence(
-                        target: n.start,
-                        floor: max(startSample, n.start - snapSearchSamples),
-                        samples: allSamples,
-                        frameSamples: frameSamples,
-                        threshold: silenceRMSThreshold
-                    )
-                let transEnd = i == nominal.count - 1
-                    ? n.end
-                    : snapForwardToSilence(
-                        target: n.end,
-                        ceil: min(endSample, n.end + snapSearchSamples),
-                        samples: allSamples,
-                        frameSamples: frameSamples,
-                        threshold: silenceRMSThreshold
-                    )
-
-                let keepStart = i == 0 ? Float(n.start) / sr - 0.25 : borders[i - 1]
-                let keepEnd = i == nominal.count - 1 ? Float(n.end) / sr + 0.25 : borders[i]
-
-                chunks.append(makeChunk(
-                    allSamples: allSamples, sr: sr,
-                    start: transStart, end: transEnd,
-                    keepStart: keepStart, keepEnd: keepEnd
-                ))
-            }
-        }
-
-        debug("regionsToChunks: done, \(chunks.count) total chunks.")
-        return chunks
-    }
-
     /// Simple RMS-based chunking: accumulate speech up to `maxDuration` seconds.
-    /// Transcribe window == keep window (no overlap, no complex ownership).
-    /// When maxDuration reached, cut at the nearest silence boundary (not mid-word).
-    /// If no silence found, allow exceeding maxDuration up to the next silence.
+    /// When maxDuration reached, cut at a silence boundary — backward first, forward fallback.
+    /// Audio fed to Whisper is padded outward by `contextPadSeconds` for better context,
+    /// but subtitle boundaries (keepStart/keepEnd) remain at the original speech edges.
     static func rmsChunks(
         allSamples: [Float],
         sampleRate: Int = 16000,
         maxDuration: Float = 9.0,
+        minChunkSeconds: Float = 2.0,
         rmsThreshold: Float = 0.01,
         frameSeconds: Float = 0.02,
-        silenceGapSeconds: Float = 0.5
+        silenceGapSeconds: Float = 0.5,
+        contextPadSeconds: Float = 0.25
     ) -> [AudioChunk] {
         let sr = Float(sampleRate)
         let frameSamples = max(1, Int(frameSeconds * sr))
         let maxSamples = Int(maxDuration * sr)
+        let minChunkSamples = Int(minChunkSeconds * sr)
         let silenceGapFrames = max(1, Int(silenceGapSeconds / frameSeconds))
+        let padSamples = Int(contextPadSeconds * sr)
 
         var chunks: [AudioChunk] = []
         var chunkStart: Int = 0
         var silenceStartFrame: Int = -1
-        var hasExceededMax = false
+        var lastSilenceMiddleFrame: Int = -1
+        var exceededMax = false
 
         func emitChunk(end: Int) {
             guard end > chunkStart else { return }
-            chunks.append(makeChunk(
-                allSamples: allSamples, sr: sr,
-                start: chunkStart, end: end,
+
+            // Pad audio window outward for Whisper context (subtitle boundaries unchanged).
+            let audioStart = max(0, chunkStart - padSamples)
+            let audioEnd = min(allSamples.count, end + padSamples)
+
+            chunks.append(AudioChunk(
+                samples: Array(allSamples[audioStart..<audioEnd]),
+                offsetSeconds: Float(audioStart) / sr,
                 keepStart: Float(chunkStart) / sr,
                 keepEnd: Float(end) / sr
             ))
+
             chunkStart = end
             silenceStartFrame = -1
-            hasExceededMax = false
+            lastSilenceMiddleFrame = -1
+            exceededMax = false
         }
 
         var i = 0
@@ -181,40 +69,42 @@ struct SilenceDetector {
             let isSpeech = rms > rmsThreshold
 
             if isSpeech {
-                // If we were in a silence gap and now found speech,
-                // and we've exceeded maxDuration, cut in the middle of the silence.
-                if hasExceededMax && silenceStartFrame >= 0 {
-                    let cutFrame = (silenceStartFrame + frameIndex) / 2
-                    let cutSample = cutFrame * frameSamples
-                    emitChunk(end: cutSample)
+                if silenceStartFrame >= 0 {
+                    lastSilenceMiddleFrame = silenceStartFrame + (frameIndex - silenceStartFrame) / 2
                 }
                 silenceStartFrame = -1
+
+                if exceededMax {
+                    if lastSilenceMiddleFrame >= 0 {
+                        let cutSample = lastSilenceMiddleFrame * frameSamples
+                        let chunkLen = cutSample - chunkStart
+                        if chunkLen >= minChunkSamples {
+                            emitChunk(end: cutSample)
+                            continue
+                        }
+                    }
+                }
             } else {
-                // Silence frame
                 if silenceStartFrame < 0 {
                     silenceStartFrame = frameIndex
                 }
 
-                let silenceLength = frameIndex - silenceStartFrame
                 let currentDuration = i - chunkStart
+                if currentDuration >= maxSamples {
+                    exceededMax = true
 
-                // If we've exceeded max duration and have a long enough silence, cut here
-                if currentDuration >= maxSamples && silenceLength >= silenceGapFrames {
-                    let cutFrame = silenceStartFrame + silenceLength / 2
-                    let cutSample = min(cutFrame * frameSamples, allSamples.count)
-                    emitChunk(end: cutSample)
+                    let silenceLen = frameIndex - silenceStartFrame
+                    if silenceLen >= silenceGapFrames {
+                        let cutFrame = silenceStartFrame + silenceLen / 2
+                        let cutSample = min(cutFrame * frameSamples, allSamples.count)
+                        emitChunk(end: cutSample)
+                    }
                 }
-            }
-
-            let currentDuration = i - chunkStart
-            if currentDuration >= maxSamples {
-                hasExceededMax = true
             }
 
             i += frameSamples
         }
 
-        // Handle remaining audio
         let end = allSamples.count
         if end > chunkStart {
             emitChunk(end: end)
@@ -224,90 +114,12 @@ struct SilenceDetector {
         return chunks
     }
 
-    /// Walk backwards from `target` (but not below `floor`) for the closest
-    /// frame whose RMS is below `threshold`. Falls back to the quietest frame
-    /// seen. Returns the sample index of the chosen frame start.
-    private static func snapBackToSilence(
-        target: Int,
-        floor: Int,
-        samples: [Float],
-        frameSamples: Int,
-        threshold: Float
-    ) -> Int {
-        guard target - frameSamples >= floor else { return target }
-
-        var quietestPos = target
-        var quietestRMS = Float.greatestFiniteMagnitude
-
-        var frameEnd = target
-        while frameEnd - frameSamples >= floor {
-            let frameStart = frameEnd - frameSamples
-            let rms = frameRMS(samples, frameStart, frameEnd, frameSamples)
-            if rms < threshold {
-                return frameStart  // closest silence to the target
-            }
-            if rms < quietestRMS {
-                quietestRMS = rms
-                quietestPos = frameStart
-            }
-            frameEnd = frameStart
-        }
-        return quietestPos
-    }
-
-    /// Walk forwards from `target` (but not above `ceil`) for the closest frame
-    /// whose RMS is below `threshold`. Falls back to the quietest frame seen.
-    /// Returns the sample index of the chosen frame end.
-    private static func snapForwardToSilence(
-        target: Int,
-        ceil: Int,
-        samples: [Float],
-        frameSamples: Int,
-        threshold: Float
-    ) -> Int {
-        guard target + frameSamples <= ceil else { return target }
-
-        var quietestPos = target
-        var quietestRMS = Float.greatestFiniteMagnitude
-
-        var frameStart = target
-        while frameStart + frameSamples <= ceil {
-            let frameEnd = frameStart + frameSamples
-            let rms = frameRMS(samples, frameStart, frameEnd, frameSamples)
-            if rms < threshold {
-                return frameEnd  // closest silence to the target
-            }
-            if rms < quietestRMS {
-                quietestRMS = rms
-                quietestPos = frameEnd
-            }
-            frameStart = frameEnd
-        }
-        return quietestPos
-    }
-
     private static func frameRMS(_ samples: [Float], _ start: Int, _ end: Int, _ count: Int) -> Float {
         var sumSq: Float = 0
         for s in samples[start..<end] {
             sumSq += s * s
         }
         return sqrtf(sumSq / Float(count))
-    }
-
-    private static func makeChunk(
-        allSamples: [Float],
-        sr: Float,
-        start: Int,
-        end: Int,
-        keepStart: Float,
-        keepEnd: Float
-    ) -> AudioChunk {
-        AudioChunk(
-            samples: Array(allSamples[start..<end]),
-            offsetSeconds: Float(start) / sr,
-            keepStart: keepStart,
-            keepEnd: keepEnd
-        )
     }
 
     private static func debug(_ msg: String) {
