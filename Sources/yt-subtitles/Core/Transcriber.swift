@@ -7,7 +7,7 @@ struct Transcriber {
     let language: String?
     let modelDir: URL?
     let verbose: Bool
-    let qualityChecker: QualityChecker
+    let qualityChecker: QualityChecker?
     let maxRetries: Int
     let retryGainDB: Float
     let retryTempo: Float
@@ -17,7 +17,7 @@ struct Transcriber {
         language: String? = nil,
         modelDir: URL? = nil,
         verbose: Bool = false,
-        qualityChecker: QualityChecker = QualityChecker(),
+        qualityChecker: QualityChecker? = nil,
         maxRetries: Int = 1,
         retryGainDB: Float = 6.0,
         retryTempo: Float = 0.85
@@ -35,8 +35,12 @@ struct Transcriber {
     /// Transcribe audio chunks sequentially, returning segments with absolute timestamps.
     func transcribe(chunks: [AudioChunk]) async throws -> [TranscriptionSegment] {
         let sd = stderr()
+        sd.write("[yt-subtitles] transcribe: entered with \(chunks.count) chunks, model=\(model ?? "auto")\n".data(using: .utf8)!)
         let repo = "argmaxinc/whisperkit-coreml"
         let downloadBase = modelDir ?? defaultModelDir()
+        if verbose {
+            sd.write("[yt-subtitles] transcribe: downloadBase=\(downloadBase.path)\n".data(using: .utf8)!)
+        }
 
         // Resolve model variant (same logic as WhisperKit.setupModels)
         let modelVariant: String
@@ -163,6 +167,16 @@ struct Transcriber {
                 chunkSegments = []
                 for result in results {
                     for segment in result.segments {
+                        // Overlapping chunks: keep only segments whose midpoint
+                        // falls inside this chunk's ownership window. The
+                        // neighbouring chunk owns the rest of the overlap.
+                        let mid = (segment.start + segment.end) / 2 + chunk.offsetSeconds
+                        guard mid >= chunk.keepStart, mid < chunk.keepEnd else {
+                            if verbose {
+                                sd.write("  Dropping overlap segment at \(String(format: "%.2f", mid))s (own \(String(format: "%.2f", chunk.keepStart))–\(String(format: "%.2f", chunk.keepEnd))s)\n")
+                            }
+                            continue
+                        }
                         let shifted = TranscriptionSegment(
                             id: segment.id,
                             seek: segment.seek,
@@ -189,32 +203,41 @@ struct Transcriber {
                     }
                 }
                 
-                let qualityResults = chunkSegments.map { qualityChecker.check($0) }
-                let allPass = qualityResults.allSatisfy { $0.pass }
-                
-                if allPass || attempt == maxRetries {
+                if let qc = qualityChecker {
+                    let qualityResults = chunkSegments.map { qc.check($0) }
+                    let allPass = qualityResults.allSatisfy { $0.pass }
+                    
+                    if allPass || attempt == maxRetries {
+                        break
+                    }
+                    
+                    let failedReasons = qualityResults.filter { !$0.pass }.flatMap { $0.reasons }
+                    sd.write("  Quality check failed: \(failedReasons.joined(separator: ", "))\n")
+                    
+                    let inputWAV = tempDir.path("chunk_\(chunk.offsetSeconds)_\(i).wav")
+                    let outputWAV = tempDir.path("chunk_\(chunk.offsetSeconds)_\(i)_retry_\(attempt).wav")
+                    
+                    try writeWAV(samples: currentChunk.samples, to: inputWAV.path)
+                    
+                    try await AudioModifier.modifyForRetry(
+                        inputWAV: inputWAV,
+                        outputWAV: outputWAV,
+                        gainDB: retryGainDB,
+                        tempo: retryTempo
+                    )
+                    
+                    let modifiedSamples = try AudioProcessor.loadAudioAsFloatArray(fromPath: outputWAV.path)
+                    currentChunk = AudioChunk(
+                        samples: modifiedSamples,
+                        offsetSeconds: chunk.offsetSeconds,
+                        keepStart: chunk.keepStart,
+                        keepEnd: chunk.keepEnd
+                    )
+                    
+                    attempt += 1
+                } else {
                     break
                 }
-                
-                let failedReasons = qualityResults.filter { !$0.pass }.flatMap { $0.reasons }
-                sd.write("  Quality check failed: \(failedReasons.joined(separator: ", "))\n")
-                
-                let inputWAV = tempDir.path("chunk_\(chunk.offsetSeconds)_\(i).wav")
-                let outputWAV = tempDir.path("chunk_\(chunk.offsetSeconds)_\(i)_retry_\(attempt).wav")
-                
-                try writeWAV(samples: currentChunk.samples, to: inputWAV.path)
-                
-                try await AudioModifier.modifyForRetry(
-                    inputWAV: inputWAV,
-                    outputWAV: outputWAV,
-                    gainDB: retryGainDB,
-                    tempo: retryTempo
-                )
-                
-                let modifiedSamples = try AudioProcessor.loadAudioAsFloatArray(fromPath: outputWAV.path)
-                currentChunk = AudioChunk(samples: modifiedSamples, offsetSeconds: chunk.offsetSeconds)
-                
-                attempt += 1
             }
             
             allSegments.append(contentsOf: chunkSegments)
@@ -226,7 +249,7 @@ struct Transcriber {
     private func writeWAV(samples: [Float], to path: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["ffmpeg", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0", "-y", path]
+        process.arguments = ["ffmpeg", "-loglevel", "error", "-f", "s16le", "-ar", "16000", "-ac", "1", "-i", "pipe:0", "-y", path]
         
         let pipe = Pipe()
         process.standardInput = pipe

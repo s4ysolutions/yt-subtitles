@@ -11,6 +11,7 @@ struct AudioModifier {
         try await ProcessRunner.run(
             executable: "ffmpeg",
             arguments: [
+                "-loglevel", "error",
                 "-i", inputWAV.path,
                 "-af", filter,
                 "-ar", "16000",

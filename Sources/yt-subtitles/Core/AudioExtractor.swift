@@ -22,6 +22,7 @@ struct AudioExtractor {
         try await ProcessRunner.run(
             executable: "ffmpeg",
             arguments: [
+                "-loglevel", "error",
                 "-i", audioM4A.path,
                 "-ac", "1",
                 "-ar", "16000",
@@ -59,6 +60,7 @@ struct AudioExtractor {
         try await ProcessRunner.run(
             executable: "ffmpeg",
             arguments: [
+                "-loglevel", "error",
                 "-i", input.path,
                 "-ac", "1",
                 "-ar", "16000",

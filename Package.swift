@@ -17,7 +17,8 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
             ],
-            path: "Sources/yt-subtitles"
+            path: "Sources/yt-subtitles",
+            resources: [.copy("Resources")]
         ),
         .testTarget(
             name: "yt-subtitlesTests",

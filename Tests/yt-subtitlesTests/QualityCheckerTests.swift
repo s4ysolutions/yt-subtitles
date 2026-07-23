@@ -20,7 +20,7 @@ final class QualityCheckerTests: XCTestCase {
         let segment = TranscriptionSegment(
             id: 0, seek: 0, start: 0, end: 1, text: "Bad",
             tokens: [], tokenLogProbs: [[:]], temperature: 0,
-            avgLogprob: -0.9, compressionRatio: 1.5, noSpeechProb: 0.1
+            avgLogprob: -1.2, compressionRatio: 1.5, noSpeechProb: 0.1
         )
         let checker = QualityChecker()
         let result = checker.check(segment)
@@ -58,7 +58,7 @@ final class QualityCheckerTests: XCTestCase {
             id: 0, seek: 0, start: 0, end: 1, text: "Uncertain",
             tokens: [], tokenLogProbs: [[:]], temperature: 0,
             avgLogprob: -0.3, compressionRatio: 1.5, noSpeechProb: 0.1,
-            words: [WordTiming(word: "Uncertain", tokens: [], start: 0, end: 1, probability: 0.5)]
+            words: [WordTiming(word: "Uncertain", tokens: [], start: 0, end: 1, probability: 0.4)]
         )
         let checker = QualityChecker()
         let result = checker.check(segment)
@@ -66,11 +66,27 @@ final class QualityCheckerTests: XCTestCase {
         XCTAssertTrue(result.reasons[0].contains("word"))
     }
     
+    func testSkipsShortWords() {
+        let segment = TranscriptionSegment(
+            id: 0, seek: 0, start: 0, end: 1, text: "A Pa",
+            tokens: [], tokenLogProbs: [[:]], temperature: 0,
+            avgLogprob: -0.3, compressionRatio: 1.5, noSpeechProb: 0.1,
+            words: [
+                WordTiming(word: "A", tokens: [], start: 0, end: 0.2, probability: 0.1),
+                WordTiming(word: "Pa", tokens: [], start: 0.2, end: 0.4, probability: 0.05),
+                WordTiming(word: "LongWord", tokens: [], start: 0.4, end: 1.0, probability: 0.9)
+            ]
+        )
+        let checker = QualityChecker()
+        let result = checker.check(segment)
+        XCTAssertTrue(result.pass)
+    }
+    
     func testMultipleFailures() {
         let segment = TranscriptionSegment(
             id: 0, seek: 0, start: 0, end: 1, text: "Bad",
             tokens: [], tokenLogProbs: [[:]], temperature: 0,
-            avgLogprob: -0.9, compressionRatio: 3.0, noSpeechProb: 0.8
+            avgLogprob: -1.2, compressionRatio: 3.0, noSpeechProb: 0.8
         )
         let checker = QualityChecker()
         let result = checker.check(segment)

@@ -2,10 +2,10 @@ import Foundation
 import WhisperKit
 
 struct QualityChecker {
-    var avgLogprobThreshold: Float = -0.7
+    var avgLogprobThreshold: Float = -1.0
     var noSpeechProbThreshold: Float = 0.5
     var compressionRatioThreshold: Float = 2.4
-    var wordProbThreshold: Float = 0.7
+    var wordProbThreshold: Float = 0.5
     
     func check(_ segment: TranscriptionSegment) -> QualityResult {
         var reasons: [String] = []
@@ -24,6 +24,8 @@ struct QualityChecker {
         
         if let words = segment.words {
             for word in words {
+                let trimmed = word.word.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: .punctuationCharacters)
+                if trimmed.count < 4 { continue }
                 if word.probability < wordProbThreshold {
                     reasons.append("word '\(word.word)' prob \(String(format: "%.2f", word.probability)) < \(wordProbThreshold)")
                     break

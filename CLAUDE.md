@@ -52,9 +52,9 @@ Tests/yt-subtitlesTests/
 1. YouTube + mp4: `AudioExtractor.downloadVideo()` → yt-dlp `--merge-output-format mp4` saved to CWD as `{title}.mp4`; skip if already exists. YouTube + subtitle-only: audio-only download to tempDir.
 2. `--local-video`: use file directly, no download. `--local-audio`: audio file, implies subtitle-only.
 3. ffmpeg → 16kHz mono WAV in tempDir (from downloaded video, local video, or local audio)
-4. SilenceDetector: 100ms RMS windows (tail samples < window classified separately), threshold 0.01, min-silence 1.5s, split at midpoints → [AudioChunk]
+4. SilenceDetector: YAMNet regions padded 0.3s lead-in / 0.1s tail. Regions ≤ 9s → one chunk; longer regions tiled on a 9s window / 5s stride grid. Two windows per chunk: (a) transcribe audio window grown *outward* to nearest 20ms RMS-silence frame (≤1.5s search, threshold 0.01) — start back, end forward — so words aren't cut and Whisper gets context; (b) keep-window for subtitle ownership, border = middle of nominal overlap. Chunks overlap in audio but keep-windows tile contiguously → [AudioChunk]
 5. Guard: if chunks empty → print message + return. If --lang not set: auto-detect from mid-audio chunk (1/3 through)
-6. WhisperKit transcribe each chunk, shift timestamps by chunk offset, report wall time + realtime speed
+6. WhisperKit transcribe each chunk, drop segments whose midpoint falls outside the chunk's keep-window (overlap dedup), shift timestamps by chunk offset, report wall time + realtime speed
 7. Auto-transliterate: sr→cyr, hr→lat unless `--translit` explicitly set. `--translit off` disables.
 8. If `--srt` (or `--no-mux` with no `--vtt` chosen): write SRT to CWD as `{base}{modelSuffix}.srt`
 9. If `--vtt`: write VTT to CWD as `{base}{modelSuffix}.vtt`

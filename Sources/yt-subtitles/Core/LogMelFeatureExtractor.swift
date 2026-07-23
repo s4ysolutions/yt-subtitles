@@ -2,7 +2,7 @@ import Accelerate
 import CoreML
 import Foundation
 
-struct LogMelFeatureExtractor {
+class LogMelFeatureExtractor {
     let sampleRate: Int = 16000
     let stftWindowMs: Float = 25.0
     let stftHopMs: Float = 10.0
@@ -16,11 +16,14 @@ struct LogMelFeatureExtractor {
     private let windowSize: Int
     private let hopSize: Int
     private var melFilterBank: [[Float]]
+    private var fftSetup: FFTSetup
+    private var window: [Float]
     
     init() {
         self.fftSize = 512
         self.windowSize = Int(Float(sampleRate) * stftWindowMs / 1000.0)
         self.hopSize = Int(Float(sampleRate) * stftHopMs / 1000.0)
+        
         self.melFilterBank = LogMelFeatureExtractor.createMelFilterBank(
             fftSize: fftSize,
             melBands: melBands,
@@ -28,56 +31,80 @@ struct LogMelFeatureExtractor {
             minFreq: melMinFreq,
             maxFreq: melMaxFreq
         )
-    }
-    
-    func extractFeatures(from samples: [Float]) -> [MLMultiArray] {
-        var patches: [MLMultiArray] = []
         
-        var offset = 0
-        while offset + windowSize <= samples.count {
-            let frame = Array(samples[offset..<offset + windowSize])
-            let melSpectrogram = computeMelSpectrogram(frame: frame)
-            
-            if melSpectrogram.count >= patchFrames {
-                let patch = createPatch(from: melSpectrogram)
-                patches.append(patch)
-            }
-            
-            offset += hopSize
-        }
-        
-        return patches
-    }
-    
-    private func computeMelSpectrogram(frame: [Float]) -> [[Float]] {
-        var windowed = [Float](repeating: 0, count: windowSize)
-        var window = [Float](repeating: 0, count: windowSize)
+        self.fftSetup = vDSP_create_fftsetup(vDSP_Length(log2(Float(fftSize))), FFTRadix(kFFTRadix2))!
+        self.window = [Float](repeating: 0, count: windowSize)
         vDSP_hann_window(&window, vDSP_Length(windowSize), Int32(vDSP_HANN_NORM))
-        vDSP_vmul(frame, 1, window, 1, &windowed, 1, vDSP_Length(windowSize))
-        
-        var magnitudes = [Float](repeating: 0, count: fftSize / 2 + 1)
-        for i in 0..<min(windowSize, fftSize / 2 + 1) {
-            magnitudes[i] = sqrt(windowed[i] * windowed[i] + 0.0001)
-        }
-        
-        var melSpectrogram: [[Float]] = []
-        for melBand in 0..<melBands {
-            var sum: Float = 0
-            for k in 0..<magnitudes.count {
-                sum += magnitudes[k] * melFilterBank[k][melBand]
-            }
-            melSpectrogram.append([log(sum + logOffset)])
-        }
-        
-        return melSpectrogram
     }
     
-    private func createPatch(from spectrogram: [[Float]]) -> MLMultiArray {
+    deinit {
+        vDSP_destroy_fftsetup(fftSetup)
+    }
+    
+    /// Extract a single 96-frame patch from the given samples
+    func extractPatch(from samples: [Float]) -> MLMultiArray? {
+        // Compute number of frames we can extract
+        let numFrames = (samples.count - windowSize) / hopSize + 1
+        let framesNeeded = min(numFrames, patchFrames)
+        
+        var melSpectrogram = [[Float]](repeating: [Float](repeating: 0, count: melBands), count: framesNeeded)
+        
+        var real = [Float](repeating: 0, count: fftSize / 2 + 1)
+        var imag = [Float](repeating: 0, count: fftSize / 2 + 1)
+        
+        for frameIdx in 0..<framesNeeded {
+            let offset = frameIdx * hopSize
+            let end = offset + windowSize
+            guard end <= samples.count else { break }
+            
+            // Apply window
+            var windowed = [Float](repeating: 0, count: windowSize)
+            samples.withUnsafeBufferPointer { samplesBuf in
+                vDSP_vmul(samplesBuf.baseAddress! + offset, 1, window, 1, &windowed, 1, vDSP_Length(windowSize))
+            }
+            
+            // Zero-pad to fftSize
+            var paddedReal = [Float](repeating: 0, count: fftSize)
+            for i in 0..<windowSize {
+                paddedReal[i] = windowed[i]
+            }
+            
+            // Compute magnitudes
+            var magnitudes = [Float](repeating: 0, count: fftSize / 2 + 1)
+            
+            // FFT using vDSP_ctoz + vDSP_fft_zrip
+            var complexArray = [DSPComplex](repeating: DSPComplex(real: 0, imag: 0), count: fftSize / 2)
+            for i in 0..<fftSize / 2 {
+                complexArray[i] = DSPComplex(real: paddedReal[2*i], imag: paddedReal[2*i + 1])
+            }
+            
+            real.withUnsafeMutableBufferPointer { realBuf in
+                imag.withUnsafeMutableBufferPointer { imagBuf in
+                    var splitComplex = DSPSplitComplex(realp: realBuf.baseAddress!, imagp: imagBuf.baseAddress!)
+                    complexArray.withUnsafeMutableBufferPointer { complexPtr in
+                        vDSP_ctoz(UnsafePointer<DSPComplex>(complexPtr.baseAddress!), 2, &splitComplex, 1, vDSP_Length(fftSize / 2))
+                        vDSP_fft_zrip(fftSetup, &splitComplex, 1, vDSP_Length(log2(Float(fftSize))), FFTDirection(FFT_FORWARD))
+                    }
+                    vDSP_zvabs(&splitComplex, 1, &magnitudes, 1, vDSP_Length(fftSize / 2 + 1))
+                }
+            }
+            
+            // Apply mel filter bank
+            for melBand in 0..<melBands {
+                var sum: Float = 0
+                for k in 0..<magnitudes.count {
+                    sum += magnitudes[k] * melFilterBank[k][melBand]
+                }
+                melSpectrogram[frameIdx][melBand] = log(sum + logOffset)
+            }
+        }
+        
+        // Create patch [1, 96, 64]
         let patch = try! MLMultiArray(shape: [1, NSNumber(value: patchFrames), NSNumber(value: melBands)], dataType: .float16)
         
         for frame in 0..<patchFrames {
             for band in 0..<melBands {
-                let value = spectrogram[frame][band]
+                let value = frame < melSpectrogram.count ? melSpectrogram[frame][band] : 0
                 patch[[0, NSNumber(value: frame), NSNumber(value: band)]] = NSNumber(value: value)
             }
         }

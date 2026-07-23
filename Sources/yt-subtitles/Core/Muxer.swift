@@ -27,6 +27,7 @@ struct Muxer {
         try await ProcessRunner.run(
             executable: "ffmpeg",
             arguments: [
+                "-loglevel", "error",
                 "-i", videoPath.path,
                 "-f", "srt", "-i", subtitlesPath.path,
                 "-c:v", "copy",
