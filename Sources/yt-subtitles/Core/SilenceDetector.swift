@@ -26,7 +26,7 @@ struct SilenceDetector {
         rmsThreshold: Float = 0.01,
         frameSeconds: Float = 0.02,
         silenceGapSeconds: Float = 0.5,
-        contextPadSeconds: Float = 0.25
+        contextPadSeconds: Float = 0.45
     ) -> [AudioChunk] {
         let sr = Float(sampleRate)
         let frameSamples = max(1, Int(frameSeconds * sr))

@@ -87,7 +87,7 @@ yt-subtitles --local-audio audio.wav --lang sr               # → audio.subtitl
 
 Speech is accumulated into chunks up to 9 seconds. When the limit is reached, the algorithm tries to cut at a silence boundary — **backward first** (most recent silence midpoint), falling back to forward (next silence) if backward would produce a chunk shorter than 2 seconds. This prevents cutting words mid-utterance while keeping chunks reasonable. Chunks can exceed 9s if needed to reach a clean silence boundary.
 
-Audio fed to Whisper includes 0.25s context padding on each side (beyond the subtitle boundaries) so Whisper sees word beginnings/endings that might otherwise be clipped. Subtitles are unaffected — timestamps and boundaries remain at the original speech edges.
+Audio fed to Whisper includes 0.45s context padding on each side (beyond the subtitle boundaries) so Whisper sees word beginnings/endings that might otherwise be clipped. Subtitles are unaffected — timestamps and boundaries remain at the original speech edges.
 
 ## Output Naming
 
