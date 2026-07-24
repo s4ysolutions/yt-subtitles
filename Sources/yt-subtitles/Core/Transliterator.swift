@@ -18,30 +18,31 @@ struct Transliterator {
         "e": "е", "f": "ф", "g": "г", "h": "х", "i": "и", "j": "ј", "k": "к", "l": "л",
         "m": "м", "n": "н", "o": "о", "p": "п", "r": "р", "s": "с",
         "š": "ш", "t": "т", "u": "у", "v": "в", "z": "з", "ž": "ж",
-        // Whisper outputs these (Latin digraphs without diacritics)
+        // Dž/Џ variants
         "DŽ": "Џ", "Dž": "Џ", "dž": "џ", "dŽ": "џ",
+        // Latin j (U+006A) digraphs
         "Dj": "Ђ", "DJ": "Ђ", "dj": "ђ",
         "Lj": "Љ", "LJ": "Љ", "lj": "љ",
         "Nj": "Њ", "NJ": "Њ", "nj": "њ",
-        // Mixed Cyrillic/Latin digraphs (Whisper sometimes mixes scripts)
-        "DЈ": "Ђ", "Dј": "Ђ", "dј": "ђ", "dЈ": "ђ",
-        "LЈ": "Љ", "Lј": "Љ", "lј": "љ", "lЈ": "љ",
-        "NЈ": "Њ", "Nј": "Њ", "nј": "њ", "nЈ": "њ",
+        // Cyrillic ј (U+0458) digraphs - use \u{0458} for lowercase, \u{0408} for uppercase
+        "D\u{0408}": "Ђ", "D\u{0458}": "Ђ", "d\u{0458}": "ђ", "d\u{0408}": "ђ",
+        "L\u{0408}": "Љ", "L\u{0458}": "Љ", "l\u{0458}": "љ", "l\u{0408}": "љ",
+        "N\u{0408}": "Њ", "N\u{0458}": "Њ", "n\u{0458}": "њ", "n\u{0408}": "њ",
     ]
 
     /// Cyrillic chars that have Latin equivalents (for normalizing mixed-script input).
     private static let cyrillicToLatinSingle: [Character: String] = [
         "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Ђ": "Đ", "Е": "E", "Ж": "Ž",
-        "З": "Z", "И": "I", "Ј": "J", "К": "K", "Л": "L", "Љ": "Lj", "М": "M", "Н": "N",
+        "З": "Z", "И": "I", "\u{0408}": "J", "К": "K", "Л": "L", "Љ": "Lj", "М": "M", "Н": "N",
         "Њ": "Nj", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T", "Ћ": "Ć", "У": "U",
         "Ф": "F", "Х": "H", "Ц": "C", "Ч": "Č", "Џ": "Dž", "Ш": "Š",
         "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "ђ": "đ", "е": "e", "ж": "ž",
-        "з": "z", "и": "i", "ј": "j", "к": "k", "л": "l", "љ": "lj", "м": "m", "н": "n",
+        "з": "z", "и": "i", "\u{0458}": "j", "к": "k", "л": "l", "љ": "lj", "м": "m", "н": "n",
         "њ": "nj", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "ћ": "ć", "у": "u",
         "ф": "f", "х": "h", "ц": "c", "ч": "č", "џ": "dž", "ш": "š",
     ]
 
-    /// Reverse mapping: Cyrillic char → preferred Latin string.
+    /// Reverse mapping: Cyrillic char → preferred Latin string (standard forms).
     private static let cyrillicToLatin: [String: String] = [
         "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Ђ": "Đ", "Е": "E", "Ж": "Ž",
         "З": "Z", "И": "I", "Ј": "J", "К": "K", "Л": "L", "Љ": "Lj", "М": "M", "Н": "N",
