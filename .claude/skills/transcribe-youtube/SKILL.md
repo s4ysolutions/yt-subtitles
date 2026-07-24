@@ -5,6 +5,11 @@ description: Use when transcribing YouTube videos to subtitles with yt-subtitles
 
 # Transcribe YouTube Videos
 
+**REQUIRED: Ask user for these parameters before running:**
+1. Language (`--lang`) - or "auto-detect" if not specified
+2. Model (`--model`) - default is `small`
+3. Output format - muxed mp4 (default), or `--no-mux` for subtitle files only
+
 ## Quick Reference
 
 | Parameter | Flag | Default | Options |

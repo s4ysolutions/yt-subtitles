@@ -98,4 +98,37 @@ final class TransliteratorTests: XCTestCase {
         let result = Transliterator.transliterate("Здраво, свете!", mode: .lat)
         XCTAssertEqual(result, "Zdravo, svete!")
     }
+
+    // MARK: - Whisper-specific digraphs
+
+    func testWhisperDjToCyrillic() {
+        let result = Transliterator.transliterate("DJ", mode: .cyr)
+        XCTAssertEqual(result, "Ђ")
+    }
+
+    func testWhisperLjToCyrillic() {
+        let result = Transliterator.transliterate("LJ", mode: .cyr)
+        XCTAssertEqual(result, "Љ")
+    }
+
+    func testWhisperNjToCyrillic() {
+        let result = Transliterator.transliterate("NJ", mode: .cyr)
+        XCTAssertEqual(result, "Њ")
+    }
+
+    func testWhisperDjLowerToCyrillic() {
+        // Whisper outputs lowercase "dj" → "ђ"
+        let result = Transliterator.transliterate("dj", mode: .cyr)
+        XCTAssertEqual(result, "ђ")
+    }
+
+    func testWhisperLjLowerToCyrillic() {
+        let result = Transliterator.transliterate("lj", mode: .cyr)
+        XCTAssertEqual(result, "љ")
+    }
+
+    func testWhisperNjLowerToCyrillic() {
+        let result = Transliterator.transliterate("nj", mode: .cyr)
+        XCTAssertEqual(result, "њ")
+    }
 }
