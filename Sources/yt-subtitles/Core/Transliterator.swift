@@ -18,13 +18,15 @@ struct Transliterator {
         "e": "е", "f": "ф", "g": "г", "h": "х", "i": "и", "j": "ј", "k": "к", "l": "л",
         "m": "м", "n": "н", "o": "о", "p": "п", "r": "р", "s": "с",
         "š": "ш", "t": "т", "u": "у", "v": "в", "z": "з", "ž": "ж",
+        // Whisper outputs these (Latin digraphs without diacritics)
         "DŽ": "Џ", "Dž": "Џ", "dž": "џ", "dŽ": "џ",
-        "Dj": "Ђ", "Dj": "Ђ", "dj": "ђ", "dj": "ђ", // lat j
-        "Lj": "Љ", "Lj": "Љ", "lj": "љ", "lj": "љ", // lat j
-        "Nj": "Њ", "Nj": "Њ", "nj": "њ", "nj": "њ", // lat j
-        "DЈ": "Ђ", "Dј": "Ђ", "dј": "ђ", "dЈ": "ђ", // cyr ј
-        "LЈ": "Љ", "Lј": "Љ", "lј": "љ", "lЈ": "љ", // cyr ј
-        "NЈ": "Њ", "Nј": "Њ", "nј": "њ", "nЈ": "њ", // cyr ј
+        "Dj": "Ђ", "DJ": "Ђ", "dj": "ђ",
+        "Lj": "Љ", "LJ": "Љ", "lj": "љ",
+        "Nj": "Њ", "NJ": "Њ", "nj": "њ",
+        // Mixed Cyrillic/Latin digraphs (Whisper sometimes mixes scripts)
+        "DЈ": "Ђ", "Dј": "Ђ", "dј": "ђ", "dЈ": "ђ",
+        "LЈ": "Љ", "Lј": "Љ", "lј": "љ", "lЈ": "љ",
+        "NЈ": "Њ", "Nј": "Њ", "nј": "њ", "nЈ": "њ",
     ]
 
     /// Cyrillic chars that have Latin equivalents (for normalizing mixed-script input).
@@ -39,14 +41,17 @@ struct Transliterator {
         "ф": "f", "х": "h", "ц": "c", "ч": "č", "џ": "dž", "ш": "š",
     ]
 
-    /// Reverse mapping: Cyrillic char → Latin string.
-    private static let cyrillicToLatin: [String: String] = {
-        var result: [String: String] = [:]
-        for (lat, cyr) in latinToCyrillic {
-            result[cyr] = lat
-        }
-        return result
-    }()
+    /// Reverse mapping: Cyrillic char → preferred Latin string.
+    private static let cyrillicToLatin: [String: String] = [
+        "А": "A", "Б": "B", "В": "V", "Г": "G", "Д": "D", "Ђ": "Đ", "Е": "E", "Ж": "Ž",
+        "З": "Z", "И": "I", "Ј": "J", "К": "K", "Л": "L", "Љ": "Lj", "М": "M", "Н": "N",
+        "Њ": "Nj", "О": "O", "П": "P", "Р": "R", "С": "S", "Т": "T", "Ћ": "Ć", "У": "U",
+        "Ф": "F", "Х": "H", "Ц": "C", "Ч": "Č", "Џ": "Dž", "Ш": "Š",
+        "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "ђ": "đ", "е": "e", "ж": "ž",
+        "з": "z", "и": "i", "ј": "j", "к": "k", "л": "l", "љ": "lj", "м": "m", "н": "n",
+        "њ": "nj", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "ћ": "ć", "у": "u",
+        "ф": "f", "х": "h", "ц": "c", "ч": "č", "џ": "dž", "ш": "š",
+    ]
 
     static func transliterate(_ text: String, mode: TranslitMode) -> String {
         switch mode {

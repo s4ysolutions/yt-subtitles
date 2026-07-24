@@ -219,6 +219,11 @@ struct Transcriber {
                 }
                 sd.write("\n")
                 
+                // Task 2: If chunk >= 5s and no segments produced, retry once with slower tempo
+                let hasSegments = !chunkSegments.isEmpty
+                let chunkDuration = Float(currentChunk.samples.count) / 16000.0
+                let shouldRetryForEmpty = !hasSegments && chunkDuration >= 5.0 && attempt == 0
+                
                 if let qc = qualityChecker {
                     let qualityResults = chunkSegments.map { qc.check($0) }
                     let allPass = qualityResults.allSatisfy { $0.pass }
@@ -240,6 +245,30 @@ struct Transcriber {
                         outputWAV: outputWAV,
                         gainDB: retryGainDB,
                         tempo: retryTempo
+                    )
+                    
+                    let modifiedSamples = try AudioProcessor.loadAudioAsFloatArray(fromPath: outputWAV.path)
+                    currentChunk = AudioChunk(
+                        samples: modifiedSamples,
+                        offsetSeconds: chunk.offsetSeconds,
+                        keepStart: chunk.keepStart,
+                        keepEnd: chunk.keepEnd
+                    )
+                    
+                    attempt += 1
+                } else if shouldRetryForEmpty {
+                    sd.write("  No segments in long chunk (\(String(format: "%.1f", chunkDuration))s), retrying at 1.25x slower...\n")
+                    
+                    let inputWAV = tempDir.path("chunk_\(chunk.offsetSeconds)_\(i).wav")
+                    let outputWAV = tempDir.path("chunk_\(chunk.offsetSeconds)_\(i)_empty_retry.wav")
+                    
+                    try writeWAV(samples: currentChunk.samples, to: inputWAV.path)
+                    
+                    try await AudioModifier.modifyForRetry(
+                        inputWAV: inputWAV,
+                        outputWAV: outputWAV,
+                        gainDB: 0.0,  // No gain change, just tempo
+                        tempo: 1.25    // 1.25x slower
                     )
                     
                     let modifiedSamples = try AudioProcessor.loadAudioAsFloatArray(fromPath: outputWAV.path)
